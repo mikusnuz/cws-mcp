@@ -14,7 +14,8 @@ const PUBLISHER_ID = process.env.CWS_PUBLISHER_ID || "me";
 const DEFAULT_ITEM_ID = process.env.CWS_ITEM_ID || "";
 
 const API_BASE = "https://chromewebstore.googleapis.com";
-const UPLOAD_BASE = "https://www.googleapis.com/upload/chrome/v2";
+const UPLOAD_BASE = "https://chromewebstore.googleapis.com/upload/v2";
+const V1_BASE = "https://www.googleapis.com/chromewebstore/v1.1";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 
 // ── OAuth2 Token Management ──
@@ -100,13 +101,13 @@ const server = new McpServer({
 // ── upload ──
 server.tool(
   "upload",
-  "Upload a ZIP file to Chrome Web Store. Creates a new draft or updates an existing item.",
+  "Upload a ZIP file to Chrome Web Store. If itemId is provided, updates an existing item. If omitted, creates a new item.",
   {
     zipPath: z.string().describe("Absolute path to the ZIP file to upload"),
     itemId: z
       .string()
       .optional()
-      .describe("Extension item ID (defaults to CWS_ITEM_ID env var)"),
+      .describe("Extension item ID. Omit to create a new item."),
     publisherId: z
       .string()
       .optional()
@@ -114,11 +115,14 @@ server.tool(
   },
   async ({ zipPath, itemId, publisherId }) => {
     try {
-      const id = resolveItemId(itemId);
       const pub = resolvePublisherId(publisherId);
       const zipData = readFileSync(zipPath);
 
-      const url = `${UPLOAD_BASE}/publishers/${pub}/items/${id}:upload`;
+      const id = itemId || DEFAULT_ITEM_ID;
+      const url = id
+        ? `${UPLOAD_BASE}/publishers/${pub}/items/${id}:upload`
+        : `${UPLOAD_BASE}/publishers/${pub}/items:upload`;
+
       const result = await apiCall(url, {
         method: "POST",
         headers: { "Content-Type": "application/zip" },
@@ -193,7 +197,7 @@ server.tool(
       const pub = resolvePublisherId(publisherId);
 
       const url = `${API_BASE}/v2/publishers/${pub}/items/${id}:fetchStatus`;
-      const result = await apiCall(url, { method: "POST" });
+      const result = await apiCall(url, { method: "GET" });
 
       return {
         content: [{ type: "text" as const, text: result.body }],
@@ -272,6 +276,86 @@ server.tool(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ deployPercentage: percentage }),
+      });
+
+      return {
+        content: [{ type: "text" as const, text: result.body }],
+        isError: !result.ok,
+      };
+    } catch (e: any) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${e.message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ── get (v1) ──
+server.tool(
+  "get",
+  "Get the current metadata of a Chrome Web Store item (v1 API). Returns description, category, and other listing fields.",
+  {
+    itemId: z
+      .string()
+      .optional()
+      .describe("Extension item ID (defaults to CWS_ITEM_ID env var)"),
+  },
+  async ({ itemId }) => {
+    try {
+      const id = resolveItemId(itemId);
+      const url = `${V1_BASE}/items/${id}?projection=DRAFT`;
+      const result = await apiCall(url, { method: "GET" });
+
+      return {
+        content: [{ type: "text" as const, text: result.body }],
+        isError: !result.ok,
+      };
+    } catch (e: any) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${e.message}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ── update-metadata (v1) ──
+server.tool(
+  "update-metadata",
+  "Update the store listing metadata of a Chrome Web Store item (v1 API). Updates description, category, etc. without uploading a new package.",
+  {
+    itemId: z
+      .string()
+      .optional()
+      .describe("Extension item ID (defaults to CWS_ITEM_ID env var)"),
+    description: z
+      .string()
+      .optional()
+      .describe("Store listing description"),
+    category: z
+      .string()
+      .optional()
+      .describe("Category (e.g. 'productivity', 'developer_tools')"),
+    defaultLocale: z
+      .string()
+      .optional()
+      .describe("Default locale (e.g. 'ko', 'en')"),
+  },
+  async ({ itemId, description, category, defaultLocale }) => {
+    try {
+      const id = resolveItemId(itemId);
+      const url = `${V1_BASE}/items/${id}`;
+
+      const metadata: Record<string, unknown> = {};
+      if (description !== undefined) metadata.description = description;
+      if (category !== undefined) metadata.category = category;
+      if (defaultLocale !== undefined) metadata.defaultLocale = defaultLocale;
+
+      const result = await apiCall(url, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(metadata),
       });
 
       return {
