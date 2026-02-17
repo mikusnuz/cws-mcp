@@ -11,6 +11,8 @@ Chrome Web Store 확장 프로그램 관리를 위한 MCP 서버. Claude Code �
 | `status` | 확장 프로그램의 현재 상태 확인 |
 | `cancel` | 제출 대기 중인 항목 취소 |
 | `deploy-percentage` | 단계적 배포 비율 설정 (0-100) |
+| `get` | DRAFT/PUBLISHED 리스팅 메타데이터 조회 (v1 API) |
+| `update-metadata` | 제목/요약/설명/카테고리 및 raw metadata 포함 메타데이터 업데이트 |
 
 ## 설정
 
@@ -94,6 +96,25 @@ cws-mcp status 도구 사용
 ```
 1. cws-mcp upload (zipPath="/path/to/extension.zip")
 2. cws-mcp publish
+```
+
+### 퍼블리시 없이 제목/설명 업데이트
+```
+cws-mcp update-metadata 사용:
+- title="PlumWallet"
+- summary="Official wallet for Plumise"
+- description="..."
+- category="productivity"
+- defaultLocale="en"
+```
+
+### 고급 메타데이터 업데이트
+```
+cws-mcp update-metadata에서 metadata 객체 전달:
+{
+  "homepageUrl": "https://plumise.com",
+  "supportUrl": "https://plug.plumise.com/docs"
+}
 ```
 
 ### 단계적 배포

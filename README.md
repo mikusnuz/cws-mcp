@@ -11,6 +11,8 @@ MCP server for Chrome Web Store extension management. Upload, publish, and manag
 | `status` | Fetch the current status of an extension |
 | `cancel` | Cancel a pending submission |
 | `deploy-percentage` | Set staged rollout percentage (0-100) |
+| `get` | Read draft/published listing metadata (v1 API) |
+| `update-metadata` | Update listing metadata including title/summary/description/category and raw metadata payload |
 
 ## Setup
 
@@ -94,6 +96,24 @@ Use the cws-mcp status tool
 ```
 1. Use cws-mcp upload with zipPath="/path/to/extension.zip"
 2. Use cws-mcp publish
+```
+
+### Update listing title/description without publishing
+```
+Use cws-mcp update-metadata with:
+- title="PlumWallet"
+- summary="Official wallet for Plumise"
+- description="..."
+- category="productivity"
+- defaultLocale="en"
+```
+
+### Update advanced metadata fields
+```
+Use cws-mcp update-metadata with metadata={
+  "homepageUrl": "https://plumise.com",
+  "supportUrl": "https://plug.plumise.com/docs"
+}
 ```
 
 ### Staged rollout

@@ -95,7 +95,7 @@ async function apiCall(
 
 const server = new McpServer({
   name: "cws-mcp",
-  version: "1.0.0",
+  version: "1.1.0",
 });
 
 // ── upload ──
@@ -300,11 +300,16 @@ server.tool(
       .string()
       .optional()
       .describe("Extension item ID (defaults to CWS_ITEM_ID env var)"),
+    projection: z
+      .enum(["DRAFT", "PUBLISHED"])
+      .optional()
+      .describe("Metadata projection to fetch (defaults to DRAFT)"),
   },
-  async ({ itemId }) => {
+  async ({ itemId, projection }) => {
     try {
       const id = resolveItemId(itemId);
-      const url = `${V1_BASE}/items/${id}?projection=DRAFT`;
+      const p = projection || "DRAFT";
+      const url = `${V1_BASE}/items/${id}?projection=${encodeURIComponent(p)}`;
       const result = await apiCall(url, { method: "GET" });
 
       return {
@@ -323,12 +328,20 @@ server.tool(
 // ── update-metadata (v1) ──
 server.tool(
   "update-metadata",
-  "Update the store listing metadata of a Chrome Web Store item (v1 API). Updates description, category, etc. without uploading a new package.",
+  "Update the store listing metadata of a Chrome Web Store item (v1 API). Supports both common fields and raw metadata payload for advanced fields.",
   {
     itemId: z
       .string()
       .optional()
       .describe("Extension item ID (defaults to CWS_ITEM_ID env var)"),
+    title: z
+      .string()
+      .optional()
+      .describe("Store listing title"),
+    summary: z
+      .string()
+      .optional()
+      .describe("Store listing short summary"),
     description: z
       .string()
       .optional()
@@ -341,21 +354,55 @@ server.tool(
       .string()
       .optional()
       .describe("Default locale (e.g. 'ko', 'en')"),
+    homepageUrl: z
+      .string()
+      .optional()
+      .describe("Homepage URL"),
+    supportUrl: z
+      .string()
+      .optional()
+      .describe("Support URL"),
+    metadata: z
+      .record(z.unknown())
+      .optional()
+      .describe(
+        "Raw metadata object forwarded as-is to the v1 API. Useful for fields not exposed as first-class params."
+      ),
   },
-  async ({ itemId, description, category, defaultLocale }) => {
+  async ({
+    itemId,
+    title,
+    summary,
+    description,
+    category,
+    defaultLocale,
+    homepageUrl,
+    supportUrl,
+    metadata,
+  }) => {
     try {
       const id = resolveItemId(itemId);
       const url = `${V1_BASE}/items/${id}`;
 
-      const metadata: Record<string, unknown> = {};
-      if (description !== undefined) metadata.description = description;
-      if (category !== undefined) metadata.category = category;
-      if (defaultLocale !== undefined) metadata.defaultLocale = defaultLocale;
+      const payload: Record<string, unknown> = {
+        ...(metadata || {}),
+      };
+      if (title !== undefined) payload.title = title;
+      if (summary !== undefined) payload.summary = summary;
+      if (description !== undefined) payload.description = description;
+      if (category !== undefined) payload.category = category;
+      if (defaultLocale !== undefined) payload.defaultLocale = defaultLocale;
+      if (homepageUrl !== undefined) payload.homepageUrl = homepageUrl;
+      if (supportUrl !== undefined) payload.supportUrl = supportUrl;
+
+      if (Object.keys(payload).length === 0) {
+        throw new Error("No metadata fields provided.");
+      }
 
       const result = await apiCall(url, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(metadata),
+        body: JSON.stringify(payload),
       });
 
       return {
