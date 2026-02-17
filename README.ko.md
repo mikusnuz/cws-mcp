@@ -13,6 +13,7 @@ Chrome Web Store 확장 프로그램 관리를 위한 MCP 서버. Claude Code �
 | `deploy-percentage` | 단계적 배포 비율 설정 (0-100) |
 | `get` | DRAFT/PUBLISHED 리스팅 메타데이터 조회 (v1 API) |
 | `update-metadata` | 제목/요약/설명/카테고리 및 raw metadata 포함 메타데이터 업데이트 |
+| `update-metadata-ui` | 대시보드 UI 자동화(Playwright)로 리스팅 메타데이터 업데이트 |
 
 ## 설정
 
@@ -116,6 +117,22 @@ cws-mcp update-metadata에서 metadata 객체 전달:
   "supportUrl": "https://plug.plumise.com/docs"
 }
 ```
+
+### API 반영이 안 되는 경우(UI 자동화)
+```
+cws-mcp update-metadata-ui 사용:
+- title
+- summary
+- description
+- category
+- homepageUrl
+- supportUrl
+```
+
+참고:
+- 이 도구는 Chrome Web Store 대시보드 UI를 자동 조작합니다.
+- 로그인 필요 시 `headless=false`로 1회 실행해 로그인하세요.
+- 브라우저 프로필 기본 경로: `~/.cws-mcp-profile` (`CWS_DASHBOARD_PROFILE_DIR`로 변경 가능)
 
 ### 단계적 배포
 ```

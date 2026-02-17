@@ -13,6 +13,7 @@ MCP server for Chrome Web Store extension management. Upload, publish, and manag
 | `deploy-percentage` | Set staged rollout percentage (0-100) |
 | `get` | Read draft/published listing metadata (v1 API) |
 | `update-metadata` | Update listing metadata including title/summary/description/category and raw metadata payload |
+| `update-metadata-ui` | Update listing metadata via dashboard UI automation (Playwright) |
 
 ## Setup
 
@@ -115,6 +116,22 @@ Use cws-mcp update-metadata with metadata={
   "supportUrl": "https://plug.plumise.com/docs"
 }
 ```
+
+### When API metadata updates don't reflect
+```
+Use cws-mcp update-metadata-ui with:
+- title
+- summary
+- description
+- category
+- homepageUrl
+- supportUrl
+```
+
+Notes:
+- This tool automates the Chrome Web Store dashboard UI.
+- First run with `headless=false` if login is required.
+- Browser profile path defaults to `~/.cws-mcp-profile` (override with `CWS_DASHBOARD_PROFILE_DIR`).
 
 ### Staged rollout
 ```

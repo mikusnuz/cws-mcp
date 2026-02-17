@@ -4,6 +4,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { readFileSync } from "fs";
+import { chromium, type Page } from "playwright";
+import { homedir } from "os";
+import { resolve } from "path";
 
 // ── Config ──
 
@@ -17,6 +20,8 @@ const API_BASE = "https://chromewebstore.googleapis.com";
 const UPLOAD_BASE = "https://chromewebstore.googleapis.com/upload/v2";
 const V1_BASE = "https://www.googleapis.com/chromewebstore/v1.1";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
+const DASHBOARD_PROFILE_DIR =
+  process.env.CWS_DASHBOARD_PROFILE_DIR || resolve(homedir(), ".cws-mcp-profile");
 
 // ── OAuth2 Token Management ──
 
@@ -89,6 +94,29 @@ async function apiCall(
   const res = await fetch(url, { ...options, headers });
   const body = await res.text();
   return { ok: res.ok, status: res.status, body };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function fillTextFieldByLabel(page: Page, labels: string[], value: string) {
+  const parts = labels.map(escapeRegExp).join("|");
+  const regex = new RegExp(parts, "i");
+  const locator = page.getByLabel(regex).first();
+  if ((await locator.count()) === 0) {
+    throw new Error(`Unable to locate field by labels: ${labels.join(", ")}`);
+  }
+  await locator.fill(value);
+}
+
+async function clickSaveButton(page: Page) {
+  const saveBtn = page.getByRole("button", { name: /save|저장/i }).first();
+  if ((await saveBtn.count()) === 0) {
+    throw new Error("Save button not found on dashboard page.");
+  }
+  await saveBtn.click();
+  await page.waitForTimeout(2000);
 }
 
 // ── MCP Server ──
@@ -416,6 +444,137 @@ server.tool(
       };
     }
   },
+);
+
+// ── update-metadata-ui (dashboard automation) ──
+server.tool(
+  "update-metadata-ui",
+  "Update listing metadata via Chrome Web Store dashboard UI automation (Playwright). Use this when API metadata updates are not reflected.",
+  {
+    itemId: z
+      .string()
+      .optional()
+      .describe("Extension item ID (defaults to CWS_ITEM_ID env var)"),
+    title: z.string().optional().describe("Store listing title"),
+    summary: z.string().optional().describe("Store listing short summary"),
+    description: z.string().optional().describe("Store listing long description"),
+    category: z.string().optional().describe("Category label as shown in dashboard UI"),
+    homepageUrl: z.string().optional().describe("Homepage URL"),
+    supportUrl: z.string().optional().describe("Support URL"),
+    accountIndex: z
+      .number()
+      .int()
+      .min(0)
+      .max(9)
+      .optional()
+      .describe("Google account index in dashboard URL (default: 0)"),
+    headless: z
+      .boolean()
+      .optional()
+      .describe("Run browser headless (default: false)"),
+  },
+  async ({
+    itemId,
+    title,
+    summary,
+    description,
+    category,
+    homepageUrl,
+    supportUrl,
+    accountIndex,
+    headless,
+  }) => {
+    try {
+      const id = resolveItemId(itemId);
+      const idx = accountIndex ?? 0;
+      const dashboardUrl = `https://chromewebstore.google.com/u/${idx}/dashboard/${id}/edit`;
+
+      const hasAnyField = [title, summary, description, category, homepageUrl, supportUrl].some(
+        (v) => typeof v === "string" && v.trim().length > 0
+      );
+      if (!hasAnyField) {
+        throw new Error("No fields provided for UI update.");
+      }
+
+      const context = await chromium.launchPersistentContext(DASHBOARD_PROFILE_DIR, {
+        channel: "chrome",
+        headless: headless ?? false,
+      });
+
+      try {
+        const page = context.pages()[0] || (await context.newPage());
+        await page.goto(dashboardUrl, { waitUntil: "domcontentloaded", timeout: 90_000 });
+        await page.waitForTimeout(2500);
+
+        if (page.url().includes("accounts.google.com")) {
+          throw new Error(
+            `Not signed in to Chrome Web Store dashboard. Open once with headless=false and sign in. Profile dir: ${DASHBOARD_PROFILE_DIR}`
+          );
+        }
+
+        if (title?.trim()) {
+          await fillTextFieldByLabel(page, ["Title", "제목", "Name", "이름"], title.trim());
+        }
+        if (summary?.trim()) {
+          await fillTextFieldByLabel(
+            page,
+            ["Summary", "Short description", "요약", "짧은 설명"],
+            summary.trim()
+          );
+        }
+        if (description?.trim()) {
+          await fillTextFieldByLabel(page, ["Description", "설명"], description.trim());
+        }
+        if (homepageUrl?.trim()) {
+          await fillTextFieldByLabel(page, ["Homepage", "홈페이지"], homepageUrl.trim());
+        }
+        if (supportUrl?.trim()) {
+          await fillTextFieldByLabel(page, ["Support", "지원", "Help", "도움말"], supportUrl.trim());
+        }
+
+        if (category?.trim()) {
+          const categoryCombo = page
+            .getByRole("combobox", { name: /category|카테고리/i })
+            .first();
+          if ((await categoryCombo.count()) > 0) {
+            await categoryCombo.click();
+            const option = page.getByRole("option", { name: new RegExp(escapeRegExp(category), "i") }).first();
+            if ((await option.count()) > 0) {
+              await option.click();
+            }
+          }
+        }
+
+        await clickSaveButton(page);
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  ok: true,
+                  mode: "dashboard-ui",
+                  profileDir: DASHBOARD_PROFILE_DIR,
+                  url: page.url(),
+                },
+                null,
+                2
+              ),
+            },
+          ],
+          isError: false,
+        };
+      } finally {
+        await context.close();
+      }
+    } catch (e: any) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${e.message}` }],
+        isError: true,
+      };
+    }
+  }
 );
 
 // ── Start ──
