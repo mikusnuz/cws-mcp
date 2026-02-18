@@ -103,27 +103,100 @@ function escapeRegExp(value: string): string {
 async function fillTextFieldByLabel(page: Page, labels: string[], value: string) {
   const parts = labels.map(escapeRegExp).join("|");
   const regex = new RegExp(parts, "i");
-  const locator = page.getByLabel(regex).first();
-  if ((await locator.count()) === 0) {
-    throw new Error(`Unable to locate field by labels: ${labels.join(", ")}`);
+
+  const candidates = [
+    page.getByLabel(regex).first(),
+    page.getByRole("textbox", { name: regex }).first(),
+    page.getByPlaceholder(regex).first(),
+  ];
+
+  for (const locator of candidates) {
+    if ((await locator.count()) > 0) {
+      await locator.fill(value);
+      return;
+    }
   }
-  await locator.fill(value);
+
+  const labelNode = page.getByText(regex).first();
+  if ((await labelNode.count()) > 0) {
+    const container = labelNode.locator("xpath=ancestor::*[self::div or self::section][1]");
+    const field = container.locator("textarea, input[type='text'], input:not([type])").first();
+    if ((await field.count()) > 0) {
+      await field.fill(value);
+      return;
+    }
+  }
+
+  throw new Error(`Unable to locate field by labels: ${labels.join(", ")}`);
+}
+
+async function uploadFileBySectionLabel(page: Page, labels: string[], filePath: string) {
+  const resolvedPath = resolve(filePath);
+  const parts = labels.map(escapeRegExp).join("|");
+  const regex = new RegExp(parts, "i");
+
+  const labelNode = page.getByText(regex).first();
+  if ((await labelNode.count()) > 0) {
+    const container = labelNode.locator("xpath=ancestor::*[self::div or self::section][1]");
+    const fileInput = container.locator("input[type='file']").first();
+    if ((await fileInput.count()) > 0) {
+      await fileInput.setInputFiles(resolvedPath);
+      await page.waitForTimeout(1200);
+      return;
+    }
+  }
+
+  const anyFileInput = page.locator("input[type='file']").first();
+  if ((await anyFileInput.count()) > 0) {
+    await anyFileInput.setInputFiles(resolvedPath);
+    await page.waitForTimeout(1200);
+    return;
+  }
+
+  throw new Error(`Unable to locate file input for labels: ${labels.join(", ")}`);
 }
 
 async function clickSaveButton(page: Page) {
-  const saveBtn = page.getByRole("button", { name: /save|저장/i }).first();
-  if ((await saveBtn.count()) === 0) {
+  const roleCandidates = [
+    page.getByRole("button", { name: /save|저장|임시저장|save draft/i }).first(),
+    page.getByRole("button", { name: /submit for review|검토/i }).first(),
+  ];
+
+  for (const saveBtn of roleCandidates) {
+    if ((await saveBtn.count()) > 0) {
+      await saveBtn.click();
+      await page.waitForTimeout(2000);
+      return;
+    }
+  }
+
+  const textCandidates = [
+    page.locator("button:has-text('저장')").first(),
+    page.locator("button:has-text('임시저장')").first(),
+    page.locator("button:has-text('Save')").first(),
+  ];
+  for (const saveBtn of textCandidates) {
+    if ((await saveBtn.count()) > 0) {
+      await saveBtn.click();
+      await page.waitForTimeout(2000);
+      return;
+    }
+  }
+
+  if ((await page.getByText(/항목이 저장되었습니다|saved/i).count()) > 0) {
+    return;
+  }
+
+  if ((await page.getByText(/변경사항이 저장되지 않았|unsaved/i).count()) === 0) {
     throw new Error("Save button not found on dashboard page.");
   }
-  await saveBtn.click();
-  await page.waitForTimeout(2000);
 }
 
 // ── MCP Server ──
 
 const server = new McpServer({
   name: "cws-mcp",
-  version: "1.1.0",
+  version: "1.3.0",
 });
 
 // ── upload ──
@@ -461,6 +534,10 @@ server.tool(
     category: z.string().optional().describe("Category label as shown in dashboard UI"),
     homepageUrl: z.string().optional().describe("Homepage URL"),
     supportUrl: z.string().optional().describe("Support URL"),
+    storeIconPath: z
+      .string()
+      .optional()
+      .describe("Absolute path to 128x128 store icon image"),
     accountIndex: z
       .number()
       .int()
@@ -481,6 +558,7 @@ server.tool(
     category,
     homepageUrl,
     supportUrl,
+    storeIconPath,
     accountIndex,
     headless,
   }) => {
@@ -489,7 +567,7 @@ server.tool(
       const idx = accountIndex ?? 0;
       const dashboardUrl = `https://chromewebstore.google.com/u/${idx}/dashboard/${id}/edit`;
 
-      const hasAnyField = [title, summary, description, category, homepageUrl, supportUrl].some(
+      const hasAnyField = [title, summary, description, category, homepageUrl, supportUrl, storeIconPath].some(
         (v) => typeof v === "string" && v.trim().length > 0
       );
       if (!hasAnyField) {
@@ -530,6 +608,13 @@ server.tool(
         }
         if (supportUrl?.trim()) {
           await fillTextFieldByLabel(page, ["Support", "지원", "Help", "도움말"], supportUrl.trim());
+        }
+        if (storeIconPath?.trim()) {
+          await uploadFileBySectionLabel(
+            page,
+            ["Store icon", "스토어 아이콘", "아이콘", "Icon"],
+            storeIconPath.trim()
+          );
         }
 
         if (category?.trim()) {
@@ -575,6 +660,143 @@ server.tool(
       };
     }
   }
+);
+
+// ── Resources ──
+
+server.resource(
+  "extension-status",
+  "cws://extensions/{extensionId}",
+  {
+    description:
+      "Get the current status and metadata of a Chrome Web Store extension by its item ID. Returns review status, deploy percentage, and listing info.",
+    mimeType: "application/json",
+  },
+  async (uri) => {
+    try {
+      const match = uri.href.match(/cws:\/\/extensions\/([^/?#]+)/);
+      if (!match) {
+        throw new Error(`Invalid resource URI: ${uri.href}. Expected format: cws://extensions/{extensionId}`);
+      }
+      const extensionId = match[1];
+      const pub = resolvePublisherId();
+
+      const token = await getAccessToken();
+
+      const [statusRes, metaRes] = await Promise.all([
+        fetch(`${API_BASE}/v2/publishers/${pub}/items/${extensionId}:fetchStatus`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch(`${V1_BASE}/items/${extensionId}?projection=PUBLISHED`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      ]);
+
+      const statusText = await statusRes.text();
+      const metaText = await metaRes.text();
+
+      let statusData: unknown = {};
+      let metaData: unknown = {};
+      try { statusData = JSON.parse(statusText); } catch { statusData = { raw: statusText }; }
+      try { metaData = JSON.parse(metaText); } catch { metaData = { raw: metaText }; }
+
+      const result = {
+        extensionId,
+        status: statusData,
+        metadata: metaData,
+      };
+
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "application/json",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (e: any) {
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "application/json",
+            text: JSON.stringify({ error: e.message }),
+          },
+        ],
+      };
+    }
+  },
+);
+
+// ── Prompts ──
+
+server.prompt(
+  "publish_extension",
+  "Step-by-step guide for publishing or updating a Chrome extension on the Chrome Web Store. Walks through upload, metadata update, and publish steps.",
+  {
+    extensionId: z.string().describe("The Chrome Web Store extension item ID"),
+    zipPath: z.string().describe("Absolute path to the built extension ZIP file"),
+    version: z.string().optional().describe("New version string (e.g. '1.2.0') for context"),
+  },
+  ({ extensionId, zipPath, version }) => ({
+    messages: [
+      {
+        role: "user" as const,
+        content: {
+          type: "text" as const,
+          text: `Please help me publish my Chrome extension to the Chrome Web Store.
+
+Extension ID: ${extensionId}
+ZIP file: ${zipPath}${version ? `\nNew version: ${version}` : ""}
+
+Follow these steps using the available cws-mcp tools:
+
+1. **Upload the ZIP** — Use the \`upload\` tool with zipPath="${zipPath}" and itemId="${extensionId}" to upload the new build as a draft.
+2. **Verify upload** — Use the \`status\` tool to confirm the upload succeeded and the item is in DRAFT state.
+3. **Check/update metadata** — Use the \`get\` tool (projection=DRAFT) to review current listing metadata. If anything needs updating (title, description, category), use \`update-metadata\` or \`update-metadata-ui\`.
+4. **Publish** — Use the \`publish\` tool to submit the draft for review.
+5. **Confirm submission** — Use the \`status\` tool again to confirm the item entered review queue.
+6. **Optional staged rollout** — After approval, use \`deploy-percentage\` to gradually roll out (e.g., 10%, 50%, 100%).
+
+Please start with step 1 now.`,
+        },
+      },
+    ],
+  }),
+);
+
+server.prompt(
+  "check_status",
+  "Check the review status and deployment percentage of a Chrome extension, and surface any actionable next steps.",
+  {
+    extensionId: z.string().describe("The Chrome Web Store extension item ID"),
+  },
+  ({ extensionId }) => ({
+    messages: [
+      {
+        role: "user" as const,
+        content: {
+          type: "text" as const,
+          text: `Please check the current status of my Chrome extension.
+
+Extension ID: ${extensionId}
+
+Use the following cws-mcp tools to gather a full picture:
+
+1. **Fetch status** — Use the \`status\` tool with itemId="${extensionId}" to get the review status and any rejection reasons.
+2. **Fetch metadata** — Use the \`get\` tool with itemId="${extensionId}" and projection=PUBLISHED to see what is currently live.
+3. **Summarize** — Report:
+   - Current review state (e.g., IN_REVIEW, PUBLISHED, REJECTED, DRAFT)
+   - Deployed version and deploy percentage if in staged rollout
+   - Any rejection reason or action required
+   - Recommended next steps (e.g., fix policy violations, increase deploy-percentage, or no action needed)
+
+Please start with step 1 now.`,
+        },
+      },
+    ],
+  }),
 );
 
 // ── Start ──

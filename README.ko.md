@@ -1,5 +1,9 @@
 # cws-mcp
 
+[English](README.md)
+
+[![MCP Badge](https://lobehub.com/badge/mcp/mikusnuz-cws-mcp)](https://lobehub.com/mcp/mikusnuz-cws-mcp)
+
 Chrome Web Store 확장 프로그램 관리를 위한 MCP 서버. Claude Code 또는 MCP 클라이언트에서 직접 크롬 확장 프로그램을 업로드, 퍼블리시, 관리할 수 있습니다.
 
 ## 도구
@@ -102,7 +106,7 @@ cws-mcp status 도구 사용
 ### 퍼블리시 없이 제목/설명 업데이트
 ```
 cws-mcp update-metadata 사용:
-- title="PlumWallet"
+- title="Pexus"
 - summary="Official wallet for Plumise"
 - description="..."
 - category="productivity"
@@ -143,5 +147,3 @@ cws-mcp update-metadata-ui 사용:
 ## 라이선스
 
 MIT
-
-[English](README.md)
