@@ -1,5 +1,7 @@
 # cws-mcp
 
+[![npm version](https://img.shields.io/npm/v/cws-mcp)](https://www.npmjs.com/package/cws-mcp)
+
 [English](README.md)
 
 [![MCP Badge](https://lobehub.com/badge/mcp/mikusnuz-cws-mcp)](https://lobehub.com/mcp/mikusnuz-cws-mcp)
