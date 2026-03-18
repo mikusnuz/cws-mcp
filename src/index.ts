@@ -6,7 +6,12 @@ import { z } from "zod";
 import { readFileSync } from "fs";
 import { chromium, type Page } from "playwright";
 import { homedir } from "os";
-import { resolve } from "path";
+import { resolve, join } from "path";
+
+// ── Version ──
+
+const pkg = JSON.parse(readFileSync(join(__dirname, "../package.json"), "utf-8"));
+const VERSION: string = pkg.version;
 
 // ── Config ──
 
@@ -94,6 +99,35 @@ async function apiCall(
   const res = await fetch(url, { ...options, headers });
   const body = await res.text();
   return { ok: res.ok, status: res.status, body };
+}
+
+/** Format API response with structured error info when applicable */
+function formatResponse(result: { ok: boolean; status: number; body: string }): {
+  content: { type: "text"; text: string }[];
+  isError: boolean;
+} {
+  if (result.ok) {
+    return {
+      content: [{ type: "text" as const, text: result.body }],
+      isError: false,
+    };
+  }
+
+  // Try to parse error body for a more readable message
+  let errorDetail = result.body;
+  try {
+    const parsed = JSON.parse(result.body);
+    if (parsed.error?.message) {
+      errorDetail = `${parsed.error.message} (code: ${parsed.error.code || result.status})`;
+    }
+  } catch {
+    // Keep raw body
+  }
+
+  return {
+    content: [{ type: "text" as const, text: `API Error (${result.status}): ${errorDetail}` }],
+    isError: true,
+  };
 }
 
 function escapeRegExp(value: string): string {
@@ -196,19 +230,19 @@ async function clickSaveButton(page: Page) {
 
 const server = new McpServer({
   name: "cws-mcp",
-  version: "1.3.0",
+  version: VERSION,
 });
 
 // ── upload ──
 server.tool(
   "upload",
-  "Upload a ZIP file to Chrome Web Store. If itemId is provided, updates an existing item. If omitted, creates a new item.",
+  "Upload a ZIP file to update an existing Chrome Web Store item draft. Note: Creating new items via API is not supported in v2 — use the Developer Dashboard to create new items.",
   {
     zipPath: z.string().describe("Absolute path to the ZIP file to upload"),
     itemId: z
       .string()
       .optional()
-      .describe("Extension item ID. Omit to create a new item."),
+      .describe("Extension item ID (defaults to CWS_ITEM_ID env var)"),
     publisherId: z
       .string()
       .optional()
@@ -216,13 +250,11 @@ server.tool(
   },
   async ({ zipPath, itemId, publisherId }) => {
     try {
+      const id = resolveItemId(itemId);
       const pub = resolvePublisherId(publisherId);
       const zipData = readFileSync(zipPath);
 
-      const id = itemId || DEFAULT_ITEM_ID;
-      const url = id
-        ? `${UPLOAD_BASE}/publishers/${pub}/items/${id}:upload`
-        : `${UPLOAD_BASE}/publishers/${pub}/items:upload`;
+      const url = `${UPLOAD_BASE}/publishers/${pub}/items/${id}:upload`;
 
       const result = await apiCall(url, {
         method: "POST",
@@ -230,10 +262,7 @@ server.tool(
         body: zipData,
       });
 
-      return {
-        content: [{ type: "text" as const, text: result.body }],
-        isError: !result.ok,
-      };
+      return formatResponse(result);
     } catch (e: any) {
       return {
         content: [{ type: "text" as const, text: `Error: ${e.message}` }],
@@ -246,7 +275,7 @@ server.tool(
 // ── publish ──
 server.tool(
   "publish",
-  "Publish an extension to Chrome Web Store. The item must have a draft ready.",
+  "Publish an extension to Chrome Web Store. Supports immediate publish, staged publish, initial deploy percentage, and skip-review.",
   {
     itemId: z
       .string()
@@ -256,19 +285,51 @@ server.tool(
       .string()
       .optional()
       .describe("Publisher ID (defaults to CWS_PUBLISHER_ID env var or 'me')"),
+    publishType: z
+      .enum(["DEFAULT_PUBLISH", "STAGED_PUBLISH"])
+      .optional()
+      .describe(
+        "DEFAULT_PUBLISH: publishes immediately after approval. STAGED_PUBLISH: stages for manual publishing after approval. Defaults to DEFAULT_PUBLISH."
+      ),
+    deployPercentage: z
+      .number()
+      .int()
+      .min(0)
+      .max(100)
+      .optional()
+      .describe("Initial deploy percentage for staged rollout (0-100). Only used with STAGED_PUBLISH or DEFAULT_PUBLISH."),
+    skipReview: z
+      .boolean()
+      .optional()
+      .describe("Attempt to skip review if the extension qualifies. Defaults to false."),
   },
-  async ({ itemId, publisherId }) => {
+  async ({ itemId, publisherId, publishType, deployPercentage, skipReview }) => {
     try {
       const id = resolveItemId(itemId);
       const pub = resolvePublisherId(publisherId);
 
       const url = `${API_BASE}/v2/publishers/${pub}/items/${id}:publish`;
-      const result = await apiCall(url, { method: "POST" });
 
-      return {
-        content: [{ type: "text" as const, text: result.body }],
-        isError: !result.ok,
-      };
+      const body: Record<string, unknown> = {};
+      if (publishType) body.publishType = publishType;
+      if (deployPercentage !== undefined) {
+        body.deployInfos = [{ deployPercentage }];
+      }
+      if (skipReview !== undefined) body.skipReview = skipReview;
+
+      const hasBody = Object.keys(body).length > 0;
+
+      const result = await apiCall(url, {
+        method: "POST",
+        ...(hasBody
+          ? {
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            }
+          : {}),
+      });
+
+      return formatResponse(result);
     } catch (e: any) {
       return {
         content: [{ type: "text" as const, text: `Error: ${e.message}` }],
@@ -281,7 +342,7 @@ server.tool(
 // ── status ──
 server.tool(
   "status",
-  "Fetch the current status of an extension on Chrome Web Store.",
+  "Fetch the current status of an extension on Chrome Web Store. Returns published/submitted revision status, deploy percentage, version, takedown/warning flags, and last upload state.",
   {
     itemId: z
       .string()
@@ -300,10 +361,7 @@ server.tool(
       const url = `${API_BASE}/v2/publishers/${pub}/items/${id}:fetchStatus`;
       const result = await apiCall(url, { method: "GET" });
 
-      return {
-        content: [{ type: "text" as const, text: result.body }],
-        isError: !result.ok,
-      };
+      return formatResponse(result);
     } catch (e: any) {
       return {
         content: [{ type: "text" as const, text: `Error: ${e.message}` }],
@@ -316,7 +374,7 @@ server.tool(
 // ── cancel ──
 server.tool(
   "cancel",
-  "Cancel a pending submission on Chrome Web Store.",
+  "Cancel a pending submission on Chrome Web Store. Can be used to cancel an item currently in review.",
   {
     itemId: z
       .string()
@@ -335,10 +393,7 @@ server.tool(
       const url = `${API_BASE}/v2/publishers/${pub}/items/${id}:cancelSubmission`;
       const result = await apiCall(url, { method: "POST" });
 
-      return {
-        content: [{ type: "text" as const, text: result.body }],
-        isError: !result.ok,
-      };
+      return formatResponse(result);
     } catch (e: any) {
       return {
         content: [{ type: "text" as const, text: `Error: ${e.message}` }],
@@ -351,13 +406,13 @@ server.tool(
 // ── deploy-percentage ──
 server.tool(
   "deploy-percentage",
-  "Set the published deploy percentage for staged rollout on Chrome Web Store.",
+  "Set the published deploy percentage for staged rollout on Chrome Web Store. The new percentage must be higher than the current target. Only available for items with 10,000+ seven-day active users.",
   {
     percentage: z
       .number()
       .min(0)
       .max(100)
-      .describe("Deploy percentage (0-100)"),
+      .describe("Deploy percentage (0-100). Must be larger than the current target percentage."),
     itemId: z
       .string()
       .optional()
@@ -379,10 +434,7 @@ server.tool(
         body: JSON.stringify({ deployPercentage: percentage }),
       });
 
-      return {
-        content: [{ type: "text" as const, text: result.body }],
-        isError: !result.ok,
-      };
+      return formatResponse(result);
     } catch (e: any) {
       return {
         content: [{ type: "text" as const, text: `Error: ${e.message}` }],
@@ -392,10 +444,10 @@ server.tool(
   },
 );
 
-// ── get (v1) ──
+// ── get (v1 — deprecated, sunset Oct 2026) ──
 server.tool(
   "get",
-  "Get the current metadata of a Chrome Web Store item (v1 API). Returns description, category, and other listing fields.",
+  "Get the current metadata of a Chrome Web Store item (v1.1 API). Returns title, description, category, and other listing fields. Note: v1 API is deprecated and will be removed after Oct 15, 2026.",
   {
     itemId: z
       .string()
@@ -413,10 +465,7 @@ server.tool(
       const url = `${V1_BASE}/items/${id}?projection=${encodeURIComponent(p)}`;
       const result = await apiCall(url, { method: "GET" });
 
-      return {
-        content: [{ type: "text" as const, text: result.body }],
-        isError: !result.ok,
-      };
+      return formatResponse(result);
     } catch (e: any) {
       return {
         content: [{ type: "text" as const, text: `Error: ${e.message}` }],
@@ -426,10 +475,10 @@ server.tool(
   },
 );
 
-// ── update-metadata (v1) ──
+// ── update-metadata (v1 — deprecated, sunset Oct 2026) ──
 server.tool(
   "update-metadata",
-  "Update the store listing metadata of a Chrome Web Store item (v1 API). Supports both common fields and raw metadata payload for advanced fields.",
+  "Update the store listing metadata of a Chrome Web Store item (v1.1 API). Supports both common fields and raw metadata payload for advanced fields. Note: v1 API is deprecated and will be removed after Oct 15, 2026. Use update-metadata-ui as an alternative.",
   {
     itemId: z
       .string()
@@ -506,10 +555,7 @@ server.tool(
         body: JSON.stringify(payload),
       });
 
-      return {
-        content: [{ type: "text" as const, text: result.body }],
-        isError: !result.ok,
-      };
+      return formatResponse(result);
     } catch (e: any) {
       return {
         content: [{ type: "text" as const, text: `Error: ${e.message}` }],
@@ -522,7 +568,7 @@ server.tool(
 // ── update-metadata-ui (dashboard automation) ──
 server.tool(
   "update-metadata-ui",
-  "Update listing metadata via Chrome Web Store dashboard UI automation (Playwright). Use this when API metadata updates are not reflected.",
+  "Update listing metadata via Chrome Web Store dashboard UI automation (Playwright). Use this when API metadata updates are not reflected, or as the primary metadata update method since the v1 API is deprecated.",
   {
     itemId: z
       .string()
@@ -755,7 +801,7 @@ Follow these steps using the available cws-mcp tools:
 1. **Upload the ZIP** — Use the \`upload\` tool with zipPath="${zipPath}" and itemId="${extensionId}" to upload the new build as a draft.
 2. **Verify upload** — Use the \`status\` tool to confirm the upload succeeded and the item is in DRAFT state.
 3. **Check/update metadata** — Use the \`get\` tool (projection=DRAFT) to review current listing metadata. If anything needs updating (title, description, category), use \`update-metadata\` or \`update-metadata-ui\`.
-4. **Publish** — Use the \`publish\` tool to submit the draft for review.
+4. **Publish** — Use the \`publish\` tool to submit the draft for review. Optionally use publishType="STAGED_PUBLISH" for staged rollout, or skipReview=true if eligible.
 5. **Confirm submission** — Use the \`status\` tool again to confirm the item entered review queue.
 6. **Optional staged rollout** — After approval, use \`deploy-percentage\` to gradually roll out (e.g., 10%, 50%, 100%).
 

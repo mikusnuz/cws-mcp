@@ -12,14 +12,28 @@ MCP server for Chrome Web Store extension management. Upload, publish, and manag
 
 | Tool | Description |
 |---|---|
-| `upload` | Upload a ZIP file to Chrome Web Store (create/update draft) |
-| `publish` | Publish an extension to the store |
-| `status` | Fetch the current status of an extension |
+| `upload` | Upload a ZIP file to Chrome Web Store (update existing item draft) |
+| `publish` | Publish an extension with optional staged rollout, publish type, and skip-review |
+| `status` | Fetch the current status including review state, deploy percentage, and version |
 | `cancel` | Cancel a pending submission |
-| `deploy-percentage` | Set staged rollout percentage (0-100) |
-| `get` | Read draft/published listing metadata (v1 API) |
-| `update-metadata` | Update listing metadata including title/summary/description/category and raw metadata payload |
+| `deploy-percentage` | Set staged rollout percentage (0-100, must exceed current target) |
+| `get` | Read draft/published listing metadata (v1.1 API, deprecated Oct 2026) |
+| `update-metadata` | Update listing metadata via v1.1 API (deprecated Oct 2026) |
 | `update-metadata-ui` | Update listing metadata via dashboard UI automation (Playwright) |
+
+## API Coverage
+
+This MCP server covers **all Chrome Web Store API v2 endpoints**:
+
+| v2 Endpoint | MCP Tool |
+|---|---|
+| `media.upload` | `upload` |
+| `publishers.items.publish` | `publish` |
+| `publishers.items.fetchStatus` | `status` |
+| `publishers.items.cancelSubmission` | `cancel` |
+| `publishers.items.setPublishedDeployPercentage` | `deploy-percentage` |
+
+Additionally, v1.1 API endpoints are available for metadata operations (`get`, `update-metadata`), with dashboard UI automation (`update-metadata-ui`) as the recommended alternative since v1 is deprecated.
 
 ## Setup
 
@@ -91,6 +105,7 @@ Or install globally via npm:
 | `CWS_REFRESH_TOKEN` | Yes | OAuth2 Refresh Token |
 | `CWS_PUBLISHER_ID` | No | Publisher ID (default: `me`) |
 | `CWS_ITEM_ID` | No | Default extension item ID |
+| `CWS_DASHBOARD_PROFILE_DIR` | No | Browser profile path for UI automation (default: `~/.cws-mcp-profile`) |
 
 ## Usage Examples
 
@@ -103,6 +118,18 @@ Use the cws-mcp status tool
 ```
 1. Use cws-mcp upload with zipPath="/path/to/extension.zip"
 2. Use cws-mcp publish
+```
+
+### Publish with staged rollout
+```
+Use cws-mcp publish with:
+- publishType="STAGED_PUBLISH"
+- deployPercentage=10
+```
+
+### Publish with skip-review
+```
+Use cws-mcp publish with skipReview=true
 ```
 
 ### Update listing title/description without publishing
@@ -143,7 +170,15 @@ Notes:
 ```
 1. Use cws-mcp publish
 2. Use cws-mcp deploy-percentage with percentage=10
+3. Use cws-mcp deploy-percentage with percentage=50
+4. Use cws-mcp deploy-percentage with percentage=100
 ```
+
+Note: `deploy-percentage` is only available for extensions with 10,000+ seven-day active users. The new percentage must always be higher than the current target.
+
+## V1 API Deprecation
+
+The `get` and `update-metadata` tools use the Chrome Web Store v1.1 API, which is **deprecated and will be removed after October 15, 2026**. The v2 API does not provide metadata read/write endpoints, so these tools remain available as a bridge. Use `update-metadata-ui` (Playwright dashboard automation) as the long-term alternative.
 
 ## License
 
