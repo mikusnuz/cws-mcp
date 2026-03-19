@@ -856,3 +856,76 @@ main().catch((err) => {
   process.stderr.write(`Fatal: ${err.message}\n`);
   process.exit(1);
 });
+
+// ── Smithery Sandbox ──
+
+export function createSandboxServer() {
+  const sandbox = new McpServer({
+    name: "cws-mcp",
+    version: VERSION,
+  });
+
+  const noop = async () => ({ content: [{ type: "text" as const, text: "sandbox" }] });
+
+  sandbox.tool("upload", "Upload a ZIP file to update an existing Chrome Web Store item draft.", {
+    zipPath: z.string().describe("Absolute path to the ZIP file to upload"),
+    itemId: z.string().optional().describe("Extension item ID"),
+    publisherId: z.string().optional().describe("Publisher ID"),
+  }, noop);
+
+  sandbox.tool("publish", "Publish an extension to Chrome Web Store.", {
+    itemId: z.string().optional().describe("Extension item ID"),
+    publisherId: z.string().optional().describe("Publisher ID"),
+    publishType: z.enum(["DEFAULT_PUBLISH", "STAGED_PUBLISH"]).optional().describe("Publish type"),
+    deployPercentage: z.number().int().min(0).max(100).optional().describe("Initial deploy percentage"),
+    skipReview: z.boolean().optional().describe("Attempt to skip review"),
+  }, noop);
+
+  sandbox.tool("status", "Fetch the current status of an extension on Chrome Web Store.", {
+    itemId: z.string().optional().describe("Extension item ID"),
+    publisherId: z.string().optional().describe("Publisher ID"),
+  }, noop);
+
+  sandbox.tool("cancel", "Cancel a pending submission on Chrome Web Store.", {
+    itemId: z.string().optional().describe("Extension item ID"),
+    publisherId: z.string().optional().describe("Publisher ID"),
+  }, noop);
+
+  sandbox.tool("deploy-percentage", "Set the published deploy percentage for staged rollout.", {
+    percentage: z.number().min(0).max(100).describe("Deploy percentage (0-100)"),
+    itemId: z.string().optional().describe("Extension item ID"),
+    publisherId: z.string().optional().describe("Publisher ID"),
+  }, noop);
+
+  sandbox.tool("get", "Get the current metadata of a Chrome Web Store item (v1.1 API).", {
+    itemId: z.string().optional().describe("Extension item ID"),
+    projection: z.enum(["DRAFT", "PUBLISHED"]).optional().describe("Metadata projection"),
+  }, noop);
+
+  sandbox.tool("update-metadata", "Update the store listing metadata of a Chrome Web Store item (v1.1 API).", {
+    itemId: z.string().optional().describe("Extension item ID"),
+    title: z.string().optional().describe("Store listing title"),
+    summary: z.string().optional().describe("Store listing short summary"),
+    description: z.string().optional().describe("Store listing description"),
+    category: z.string().optional().describe("Category"),
+    defaultLocale: z.string().optional().describe("Default locale"),
+    homepageUrl: z.string().optional().describe("Homepage URL"),
+    supportUrl: z.string().optional().describe("Support URL"),
+    metadata: z.record(z.unknown()).optional().describe("Raw metadata object"),
+  }, noop);
+
+  sandbox.tool("update-metadata-ui", "Update listing metadata via Chrome Web Store dashboard UI automation (Playwright).", {
+    itemId: z.string().optional().describe("Extension item ID"),
+    title: z.string().optional().describe("Store listing title"),
+    summary: z.string().optional().describe("Store listing short summary"),
+    description: z.string().optional().describe("Store listing long description"),
+    category: z.string().optional().describe("Category label"),
+    homepageUrl: z.string().optional().describe("Homepage URL"),
+    supportUrl: z.string().optional().describe("Support URL"),
+    storeIconPath: z.string().optional().describe("Absolute path to 128x128 store icon image"),
+    accountIndex: z.number().int().min(0).max(9).optional().describe("Google account index"),
+    headless: z.boolean().optional().describe("Run browser headless"),
+  }, noop);
+
+  return sandbox;
+}
