@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.mikusnuz/cws",
-  "description": "MCP server for Chrome Web Store extension management — 8 tools for upload, publish, status, staged rollout, and metadata updates",
+  "description": "MCP server for Chrome Web Store — extension upload, publish, status, and rollout",
   "repository": {
     "url": "https://github.com/mikusnuz/cws-mcp",
     "source": "github"
