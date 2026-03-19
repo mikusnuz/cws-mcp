@@ -8,6 +8,17 @@
 
 MCP server for Chrome Web Store extension management. Upload, publish, and manage Chrome extensions directly from Claude Code or any MCP client.
 
+## When to Use
+
+Use this MCP when you need to:
+
+- **"Upload a new version of my Chrome extension"** — build your ZIP and use the `upload` tool to push it as a draft
+- **"Publish my extension to the Chrome Web Store"** — use `publish` to submit for review and go live
+- **"Check the review status of my extension"** — use `status` to see review state, version, and deploy percentage
+- **"Update my extension's metadata (description, screenshots)"** — use `update-metadata-ui` to change store listing details
+- **"Cancel a pending submission"** — use `cancel` to withdraw a submission under review
+- **"Set up staged rollout for my extension"** — use `publish` with staged rollout, then `deploy-percentage` to ramp up
+
 ## Tools
 
 | Tool | Description |

@@ -1,0 +1,54 @@
+# cws-mcp
+
+> MCP server for Chrome Web Store extension management. Upload, publish, and manage Chrome extensions from any MCP-compatible AI agent.
+
+## Tools (8)
+
+- upload: Upload a ZIP file to Chrome Web Store (updates existing item draft)
+- publish: Publish an extension with optional staged rollout, publish type, and skip-review
+- status: Fetch current status including review state, deploy percentage, and version
+- cancel: Cancel a pending submission
+- deploy-percentage: Set staged rollout percentage (0-100, must exceed current target)
+- get: Read draft/published listing metadata (v1.1 API, deprecated Oct 2026)
+- update-metadata: Update listing metadata via v1.1 API (deprecated Oct 2026)
+- update-metadata-ui: Update listing metadata via dashboard UI automation (Playwright)
+
+## Install
+
+```json
+{
+  "mcpServers": {
+    "cws-mcp": {
+      "command": "npx",
+      "args": ["-y", "cws-mcp"],
+      "env": {
+        "CWS_CLIENT_ID": "xxxxx.apps.googleusercontent.com",
+        "CWS_CLIENT_SECRET": "GOCSPX-xxxxx",
+        "CWS_REFRESH_TOKEN": "1//xxxxx",
+        "CWS_PUBLISHER_ID": "me",
+        "CWS_ITEM_ID": "your-extension-id"
+      }
+    }
+  }
+}
+```
+
+## Environment Variables
+
+- CWS_CLIENT_ID (required): Google OAuth2 Client ID
+- CWS_CLIENT_SECRET (required): Google OAuth2 Client Secret
+- CWS_REFRESH_TOKEN (required): OAuth2 Refresh Token
+- CWS_PUBLISHER_ID (optional): Publisher ID, defaults to "me"
+- CWS_ITEM_ID (optional): Default extension item ID
+- CWS_DASHBOARD_PROFILE_DIR (optional): Browser profile path for UI automation, defaults to ~/.cws-mcp-profile
+
+## API Coverage
+
+Covers all Chrome Web Store API v2 endpoints: media.upload, publishers.items.publish, publishers.items.fetchStatus, publishers.items.cancelSubmission, publishers.items.setPublishedDeployPercentage. Also includes v1.1 metadata read/write (deprecated Oct 2026) and Playwright-based dashboard automation.
+
+## Notes
+
+- deploy-percentage only works for extensions with 10,000+ seven-day active users
+- Rollout percentage must always increase (never decrease)
+- update-metadata-ui requires first run with headless=false for login
+- v1.1 API (get, update-metadata) deprecated after October 15, 2026; prefer update-metadata-ui
