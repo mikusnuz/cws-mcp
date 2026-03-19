@@ -6,6 +6,8 @@
 
 [![MCP Badge](https://lobehub.com/badge/mcp/mikusnuz-cws-mcp)](https://lobehub.com/mcp/mikusnuz-cws-mcp)
 
+[![cws-mcp MCP server](https://glama.ai/mcp/servers/mikusnuz/cws-mcp/badges/card.svg)](https://glama.ai/mcp/servers/mikusnuz/cws-mcp)
+
 MCP server for Chrome Web Store extension management. Upload, publish, and manage Chrome extensions directly from Claude Code or any MCP client.
 
 ## When to Use
