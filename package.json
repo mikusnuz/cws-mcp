@@ -3,17 +3,41 @@
   "version": "1.4.1",
   "mcpName": "io.github.mikusnuz/cws",
   "description": "MCP server for Chrome Web Store extension management",
+  "type": "module",
   "main": "dist/index.js",
   "bin": {
     "cws-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist/**/*",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
   },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts"
   },
-  "keywords": ["mcp", "chrome-web-store", "chrome-extension", "publish"],
+  "keywords": [
+    "mcp",
+    "chrome-web-store",
+    "chrome-extension",
+    "publish",
+    "model-context-protocol"
+  ],
+  "author": "mikusnuz",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mikusnuz/cws-mcp.git"
+  },
+  "homepage": "https://github.com/mikusnuz/cws-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/mikusnuz/cws-mcp/issues"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "playwright": "^1.58.2",
