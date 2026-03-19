@@ -1,0 +1,29 @@
+# Smithery configuration file: https://smithery.ai/docs/config#smitheryyaml
+
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    required:
+      - cwsClientId
+      - cwsClientSecret
+      - cwsRefreshToken
+    properties:
+      cwsClientId:
+        type: string
+        description: Google OAuth2 Client ID for Chrome Web Store API
+      cwsClientSecret:
+        type: string
+        description: Google OAuth2 Client Secret
+      cwsRefreshToken:
+        type: string
+        description: OAuth2 Refresh Token
+      cwsPublisherId:
+        type: string
+        description: Publisher ID (default 'me')
+      cwsItemId:
+        type: string
+        description: Default extension item ID
+  commandFunction:
+    |-
+    config => ({ command: 'npx', args: ['-y', 'cws-mcp'], env: { CWS_CLIENT_ID: config.cwsClientId, CWS_CLIENT_SECRET: config.cwsClientSecret, CWS_REFRESH_TOKEN: config.cwsRefreshToken, CWS_PUBLISHER_ID: config.cwsPublisherId || 'me', CWS_ITEM_ID: config.cwsItemId || '' } })
