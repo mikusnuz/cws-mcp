@@ -1,6 +1,6 @@
 {
   "name": "cws-mcp",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "mcpName": "io.github.mikusnuz/cws",
   "description": "MCP server for Chrome Web Store extension management",
   "main": "dist/index.js",
