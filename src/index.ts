@@ -6,10 +6,13 @@ import { z } from "zod";
 import { readFileSync } from "fs";
 import { chromium, type Page } from "playwright";
 import { homedir } from "os";
-import { resolve, join } from "path";
+import { resolve, join, dirname } from "path";
+import { fileURLToPath } from "url";
 
 // ── Version ──
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 const pkg = JSON.parse(readFileSync(join(__dirname, "../package.json"), "utf-8"));
 const VERSION: string = pkg.version;
 
