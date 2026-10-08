@@ -11,9 +11,10 @@ Use `mcp__cws-mcp__<tool>` for all Chrome Web Store operations:
 - `status` — Fetch current status: review state, deploy percentage, version
 - `cancel` — Cancel a pending submission
 - `deploy-percentage` — Set staged rollout percentage (0-100, must exceed current)
-- `get` — Read draft/published listing metadata (v1.1 API)
-- `update-metadata` — Update listing metadata via v1.1 API
-- `update-metadata-ui` — Update listing metadata via dashboard UI automation (Playwright)
+- `get` — Alias of status, not listing text; projection is unsupported
+- `get-metadata-ui` — Read current draft description, category, homepage URL and support URL
+- `update-metadata` — Save supported draft fields through the dashboard and verify after reload
+- `update-metadata-ui` — Alias of update-metadata
 
 ## Common Workflows
 
@@ -24,12 +25,12 @@ Use `mcp__cws-mcp__<tool>` for all Chrome Web Store operations:
 4. Call `publish` to submit for review
 
 ### Staged rollout
-1. Call `publish` with `publishType="STAGED_PUBLISH"` and `deployPercentage=10`
+1. Call `publish` with `deployPercentage=10` for an eligible extension
 2. Monitor with `status`
 3. Increase with `deploy-percentage` (10 -> 50 -> 100)
 
 ### Update store listing
-1. Use `update-metadata-ui` (preferred) or `update-metadata` for title, description, category
+1. Use `get-metadata-ui` to read the current draft, then `update-metadata` for description, category, homepageUrl or supportUrl
 2. Call `publish` if changes need to go live
 
 ## Rules
@@ -37,5 +38,9 @@ Use `mcp__cws-mcp__<tool>` for all Chrome Web Store operations:
 - Always check `status` before `publish` to verify current state
 - `deploy-percentage` only works for extensions with 10,000+ weekly active users
 - Rollout percentage can only increase, never decrease
-- `update-metadata-ui` requires headless=false on first run for Google login
-- v1.1 API tools (`get`, `update-metadata`) are deprecated after October 2026
+- Dashboard tools require Chrome and headless=false on first run for Google login; category must match the visible option exactly
+- Saving never submits for review; unverified results return errors
+- Title/summary/defaultLocale require manifest or localized-message edits and a new ZIP upload
+- Icons/screenshots require the Developer Dashboard; raw metadata and storeIconPath are unsupported
+- STAGED_PUBLISH holds publication after approval, independently of rollout percentage
+- publish blockOnWarnings=true stops on validation warnings; default false

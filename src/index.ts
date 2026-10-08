@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { readFileSync } from "fs";
-import { chromium, type Page } from "playwright";
+import { readFileSync, realpathSync } from "fs";
+import { readDashboardMetadata, updateDashboardMetadata, validateDashboardUpdate, withDashboard } from "./dashboard.js";
 import { homedir } from "os";
 import { resolve, join, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -26,7 +26,6 @@ const DEFAULT_ITEM_ID = process.env.CWS_ITEM_ID || "";
 
 const API_BASE = "https://chromewebstore.googleapis.com";
 const UPLOAD_BASE = "https://chromewebstore.googleapis.com/upload/v2";
-const V1_BASE = "https://www.googleapis.com/chromewebstore/v1.1";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DASHBOARD_PROFILE_DIR =
   process.env.CWS_DASHBOARD_PROFILE_DIR || resolve(homedir(), ".cws-mcp-profile");
@@ -57,6 +56,7 @@ async function getAccessToken(): Promise<string> {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!res.ok) {
@@ -99,7 +99,7 @@ async function apiCall(
     ...(options.headers as Record<string, string> || {}),
   };
 
-  const res = await fetch(url, { ...options, headers });
+  const res = await fetch(url, { ...options, headers, signal: options.signal ?? AbortSignal.timeout(30_000) });
   const body = await res.text();
   return { ok: res.ok, status: res.status, body };
 }
@@ -133,104 +133,32 @@ function formatResponse(result: { ok: boolean; status: number; body: string }): 
   };
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-async function fillTextFieldByLabel(page: Page, labels: string[], value: string) {
-  const parts = labels.map(escapeRegExp).join("|");
-  const regex = new RegExp(parts, "i");
-
-  const candidates = [
-    page.getByLabel(regex).first(),
-    page.getByRole("textbox", { name: regex }).first(),
-    page.getByPlaceholder(regex).first(),
-  ];
-
-  for (const locator of candidates) {
-    if ((await locator.count()) > 0) {
-      await locator.fill(value);
-      return;
-    }
-  }
-
-  const labelNode = page.getByText(regex).first();
-  if ((await labelNode.count()) > 0) {
-    const container = labelNode.locator("xpath=ancestor::*[self::div or self::section][1]");
-    const field = container.locator("textarea, input[type='text'], input:not([type])").first();
-    if ((await field.count()) > 0) {
-      await field.fill(value);
-      return;
-    }
-  }
-
-  throw new Error(`Unable to locate field by labels: ${labels.join(", ")}`);
-}
-
-async function uploadFileBySectionLabel(page: Page, labels: string[], filePath: string) {
-  const resolvedPath = resolve(filePath);
-  const parts = labels.map(escapeRegExp).join("|");
-  const regex = new RegExp(parts, "i");
-
-  const labelNode = page.getByText(regex).first();
-  if ((await labelNode.count()) > 0) {
-    const container = labelNode.locator("xpath=ancestor::*[self::div or self::section][1]");
-    const fileInput = container.locator("input[type='file']").first();
-    if ((await fileInput.count()) > 0) {
-      await fileInput.setInputFiles(resolvedPath);
-      await page.waitForTimeout(1200);
-      return;
-    }
-  }
-
-  const anyFileInput = page.locator("input[type='file']").first();
-  if ((await anyFileInput.count()) > 0) {
-    await anyFileInput.setInputFiles(resolvedPath);
-    await page.waitForTimeout(1200);
-    return;
-  }
-
-  throw new Error(`Unable to locate file input for labels: ${labels.join(", ")}`);
-}
-
-async function clickSaveButton(page: Page) {
-  const roleCandidates = [
-    page.getByRole("button", { name: /save|저장|임시저장|save draft/i }).first(),
-    page.getByRole("button", { name: /submit for review|검토/i }).first(),
-  ];
-
-  for (const saveBtn of roleCandidates) {
-    if ((await saveBtn.count()) > 0) {
-      await saveBtn.click();
-      await page.waitForTimeout(2000);
-      return;
-    }
-  }
-
-  const textCandidates = [
-    page.locator("button:has-text('저장')").first(),
-    page.locator("button:has-text('임시저장')").first(),
-    page.locator("button:has-text('Save')").first(),
-  ];
-  for (const saveBtn of textCandidates) {
-    if ((await saveBtn.count()) > 0) {
-      await saveBtn.click();
-      await page.waitForTimeout(2000);
-      return;
-    }
-  }
-
-  if ((await page.getByText(/항목이 저장되었습니다|saved/i).count()) > 0) {
-    return;
-  }
-
-  if ((await page.getByText(/변경사항이 저장되지 않았|unsaved/i).count()) === 0) {
-    throw new Error("Save button not found on dashboard page.");
-  }
-}
+const dashboardOptions = {
+  itemId: z.string().optional().describe("Extension item ID"),
+  accountIndex: z.number().int().min(0).max(9).optional().describe("Google account index"),
+  headless: z.boolean().optional().describe("Run browser headless; use false for the first sign-in"),
+};
+const metadataSchema = {
+  ...dashboardOptions,
+  description: z.string().optional().describe("Detailed store listing description"),
+  category: z.string().optional().describe("Exact category label displayed by the dashboard"),
+  homepageUrl: z.string().optional().describe("Homepage URL; empty string clears it"),
+  supportUrl: z.string().optional().describe("Support URL; empty string clears it"),
+  title: z.string().optional().describe("Unsupported: change manifest name and upload a new ZIP"),
+  summary: z.string().optional().describe("Unsupported: change manifest description and upload a new ZIP"),
+  defaultLocale: z.string().optional().describe("Unsupported: change manifest default_locale and upload a new ZIP"),
+  metadata: z.record(z.unknown()).optional().describe("Unsupported: use the explicit dashboard fields"),
+  storeIconPath: z.string().optional().describe("Unsupported: upload the store icon directly in the dashboard"),
+};
+const getSchema = {
+  itemId: z.string().optional().describe("Extension item ID"),
+  publisherId: z.string().optional().describe("Publisher ID"),
+  projection: z.enum(["DRAFT", "PUBLISHED"]).optional().describe("Removed in 2.0; use get-metadata-ui for current draft listing text"),
+};
 
 // ── MCP Server ──
 
+export function createServer() {
 const server = new McpServer({
   name: "cws-mcp",
   version: VERSION,
@@ -263,6 +191,7 @@ server.tool(
         method: "POST",
         headers: { "Content-Type": "application/zip" },
         body: zipData,
+        signal: AbortSignal.timeout(15 * 60_000),
       });
 
       return formatResponse(result);
@@ -305,8 +234,9 @@ server.tool(
       .boolean()
       .optional()
       .describe("Attempt to skip review if the extension qualifies. Defaults to false."),
+    blockOnWarnings: z.boolean().optional().describe("Reject publishing when validation returns warnings (default: false)"),
   },
-  async ({ itemId, publisherId, publishType, deployPercentage, skipReview }) => {
+  async ({ itemId, publisherId, publishType, deployPercentage, skipReview, blockOnWarnings }) => {
     try {
       const id = resolveItemId(itemId);
       const pub = resolvePublisherId(publisherId);
@@ -319,6 +249,7 @@ server.tool(
         body.deployInfos = [{ deployPercentage }];
       }
       if (skipReview !== undefined) body.skipReview = skipReview;
+      if (blockOnWarnings !== undefined) body.blockOnWarnings = blockOnWarnings;
 
       const hasBody = Object.keys(body).length > 0;
 
@@ -447,334 +378,70 @@ server.tool(
   },
 );
 
-// ── get (v1 — deprecated, sunset Oct 2026) ──
+// ── Metadata and v2 status compatibility ──
 server.tool(
   "get",
-  "Get the current metadata of a Chrome Web Store item (v1.1 API). Returns title, description, category, and other listing fields. Note: v1 API is deprecated and will be removed after Oct 15, 2026.",
-  {
-    itemId: z
-      .string()
-      .optional()
-      .describe("Extension item ID (defaults to CWS_ITEM_ID env var)"),
-    projection: z
-      .enum(["DRAFT", "PUBLISHED"])
-      .optional()
-      .describe("Metadata projection to fetch (defaults to DRAFT)"),
-  },
-  async ({ itemId, projection }) => {
+  "Fetch publication status through v2 (alias of status). Version 2 no longer returns listing metadata or supports projection; use get-metadata-ui for draft listing text.",
+  getSchema,
+  async ({ itemId, publisherId, projection }) => {
     try {
-      const id = resolveItemId(itemId);
-      const p = projection || "DRAFT";
-      const url = `${V1_BASE}/items/${id}?projection=${encodeURIComponent(p)}`;
-      const result = await apiCall(url, { method: "GET" });
-
-      return formatResponse(result);
-    } catch (e: any) {
-      return {
-        content: [{ type: "text" as const, text: `Error: ${e.message}` }],
-        isError: true,
-      };
+      if (projection !== undefined) {
+        throw new Error("projection was removed in 2.0. get now returns v2 publication status. Use get-metadata-ui for draft listing text; published listing text is not exposed by the API.");
+      }
+      return formatResponse(await apiCall(`${API_BASE}/v2/publishers/${resolvePublisherId(publisherId)}/items/${resolveItemId(itemId)}:fetchStatus`, { method: "GET" }));
+    } catch (error) {
+      return { content: [{ type: "text" as const, text: String(error) }], isError: true };
     }
   },
 );
 
-// ── update-metadata (v1 — deprecated, sunset Oct 2026) ──
 server.tool(
-  "update-metadata",
-  "Update the store listing metadata of a Chrome Web Store item (v1.1 API). Supports both common fields and raw metadata payload for advanced fields. Note: v1 API is deprecated and will be removed after Oct 15, 2026. Use update-metadata-ui as an alternative.",
-  {
-    itemId: z
-      .string()
-      .optional()
-      .describe("Extension item ID (defaults to CWS_ITEM_ID env var)"),
-    title: z
-      .string()
-      .optional()
-      .describe("Store listing title"),
-    summary: z
-      .string()
-      .optional()
-      .describe("Store listing short summary"),
-    description: z
-      .string()
-      .optional()
-      .describe("Store listing description"),
-    category: z
-      .string()
-      .optional()
-      .describe("Category (e.g. 'productivity', 'developer_tools')"),
-    defaultLocale: z
-      .string()
-      .optional()
-      .describe("Default locale (e.g. 'ko', 'en')"),
-    homepageUrl: z
-      .string()
-      .optional()
-      .describe("Homepage URL"),
-    supportUrl: z
-      .string()
-      .optional()
-      .describe("Support URL"),
-    metadata: z
-      .record(z.unknown())
-      .optional()
-      .describe(
-        "Raw metadata object forwarded as-is to the v1 API. Useful for fields not exposed as first-class params."
-      ),
-  },
-  async ({
-    itemId,
-    title,
-    summary,
-    description,
-    category,
-    defaultLocale,
-    homepageUrl,
-    supportUrl,
-    metadata,
-  }) => {
+  "get-metadata-ui",
+  "Read the current draft listing description, category, homepage and support URL from the signed-in Developer Dashboard. This is not the published listing.",
+  dashboardOptions,
+  async ({ itemId, accountIndex, headless }) => {
     try {
-      const id = resolveItemId(itemId);
-      const url = `${V1_BASE}/items/${id}`;
-
-      const payload: Record<string, unknown> = {
-        ...(metadata || {}),
-      };
-      if (title !== undefined) payload.title = title;
-      if (summary !== undefined) payload.summary = summary;
-      if (description !== undefined) payload.description = description;
-      if (category !== undefined) payload.category = category;
-      if (defaultLocale !== undefined) payload.defaultLocale = defaultLocale;
-      if (homepageUrl !== undefined) payload.homepageUrl = homepageUrl;
-      if (supportUrl !== undefined) payload.supportUrl = supportUrl;
-
-      if (Object.keys(payload).length === 0) {
-        throw new Error("No metadata fields provided.");
-      }
-
-      const result = await apiCall(url, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      return formatResponse(result);
-    } catch (e: any) {
-      return {
-        content: [{ type: "text" as const, text: `Error: ${e.message}` }],
-        isError: true,
-      };
+      const metadata = await withDashboard({
+        itemId: resolveItemId(itemId), profileDir: DASHBOARD_PROFILE_DIR, accountIndex, headless,
+      }, readDashboardMetadata);
+      return { content: [{ type: "text" as const, text: JSON.stringify({ mode: "dashboard-ui", projection: "DRAFT", metadata }) }] };
+    } catch (error) {
+      return { content: [{ type: "text" as const, text: String(error) }], isError: true };
     }
   },
 );
 
-// ── update-metadata-ui (dashboard automation) ──
-server.tool(
-  "update-metadata-ui",
-  "Update listing metadata via Chrome Web Store dashboard UI automation (Playwright). Use this when API metadata updates are not reflected, or as the primary metadata update method since the v1 API is deprecated.",
-  {
-    itemId: z
-      .string()
-      .optional()
-      .describe("Extension item ID (defaults to CWS_ITEM_ID env var)"),
-    title: z.string().optional().describe("Store listing title"),
-    summary: z.string().optional().describe("Store listing short summary"),
-    description: z.string().optional().describe("Store listing long description"),
-    category: z.string().optional().describe("Category label as shown in dashboard UI"),
-    homepageUrl: z.string().optional().describe("Homepage URL"),
-    supportUrl: z.string().optional().describe("Support URL"),
-    storeIconPath: z
-      .string()
-      .optional()
-      .describe("Absolute path to 128x128 store icon image"),
-    accountIndex: z
-      .number()
-      .int()
-      .min(0)
-      .max(9)
-      .optional()
-      .describe("Google account index in dashboard URL (default: 0)"),
-    headless: z
-      .boolean()
-      .optional()
-      .describe("Run browser headless (default: false)"),
-  },
-  async ({
-    itemId,
-    title,
-    summary,
-    description,
-    category,
-    homepageUrl,
-    supportUrl,
-    storeIconPath,
-    accountIndex,
-    headless,
-  }) => {
-    try {
-      const id = resolveItemId(itemId);
-      const idx = accountIndex ?? 0;
-      const dashboardUrl = `https://chromewebstore.google.com/u/${idx}/dashboard/${id}/edit`;
-
-      const hasAnyField = [title, summary, description, category, homepageUrl, supportUrl, storeIconPath].some(
-        (v) => typeof v === "string" && v.trim().length > 0
-      );
-      if (!hasAnyField) {
-        throw new Error("No fields provided for UI update.");
-      }
-
-      const context = await chromium.launchPersistentContext(DASHBOARD_PROFILE_DIR, {
-        channel: "chrome",
-        headless: headless ?? false,
-      });
-
+for (const name of ["update-metadata", "update-metadata-ui"]) {
+  server.tool(
+    name,
+    "Save draft listing description, category, homepage or support URL via the signed-in Developer Dashboard, then reload to verify. Does not submit for review. Package title/summary, raw payloads, and icon uploads are unsupported.",
+    metadataSchema,
+    async (args) => {
       try {
-        const page = context.pages()[0] || (await context.newPage());
-        await page.goto(dashboardUrl, { waitUntil: "domcontentloaded", timeout: 90_000 });
-        await page.waitForTimeout(2500);
-
-        if (page.url().includes("accounts.google.com")) {
-          throw new Error(
-            `Not signed in to Chrome Web Store dashboard. Open once with headless=false and sign in. Profile dir: ${DASHBOARD_PROFILE_DIR}`
-          );
-        }
-
-        if (title?.trim()) {
-          await fillTextFieldByLabel(page, ["Title", "제목", "Name", "이름"], title.trim());
-        }
-        if (summary?.trim()) {
-          await fillTextFieldByLabel(
-            page,
-            ["Summary", "Short description", "요약", "짧은 설명"],
-            summary.trim()
-          );
-        }
-        if (description?.trim()) {
-          await fillTextFieldByLabel(page, ["Description", "설명"], description.trim());
-        }
-        if (homepageUrl?.trim()) {
-          await fillTextFieldByLabel(page, ["Homepage", "홈페이지"], homepageUrl.trim());
-        }
-        if (supportUrl?.trim()) {
-          await fillTextFieldByLabel(page, ["Support", "지원", "Help", "도움말"], supportUrl.trim());
-        }
-        if (storeIconPath?.trim()) {
-          await uploadFileBySectionLabel(
-            page,
-            ["Store icon", "스토어 아이콘", "아이콘", "Icon"],
-            storeIconPath.trim()
-          );
-        }
-
-        if (category?.trim()) {
-          const categoryCombo = page
-            .getByRole("combobox", { name: /category|카테고리/i })
-            .first();
-          if ((await categoryCombo.count()) > 0) {
-            await categoryCombo.click();
-            const option = page.getByRole("option", { name: new RegExp(escapeRegExp(category), "i") }).first();
-            if ((await option.count()) > 0) {
-              await option.click();
-            }
-          }
-        }
-
-        await clickSaveButton(page);
-
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  ok: true,
-                  mode: "dashboard-ui",
-                  profileDir: DASHBOARD_PROFILE_DIR,
-                  url: page.url(),
-                },
-                null,
-                2
-              ),
-            },
-          ],
-          isError: false,
-        };
-      } finally {
-        await context.close();
+        validateDashboardUpdate(args);
+        const result = await withDashboard({
+          itemId: resolveItemId(args.itemId), profileDir: DASHBOARD_PROFILE_DIR,
+          accountIndex: args.accountIndex, headless: args.headless,
+        }, page => updateDashboardMetadata(page, args));
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }], isError: false };
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: String(error) }], isError: true };
       }
-    } catch (e: any) {
-      return {
-        content: [{ type: "text" as const, text: `Error: ${e.message}` }],
-        isError: true,
-      };
-    }
-  }
-);
+    },
+  );
+}
 
 // ── Resources ──
 
 server.resource(
   "extension-status",
-  "cws://extensions/{extensionId}",
-  {
-    description:
-      "Get the current status and metadata of a Chrome Web Store extension by its item ID. Returns review status, deploy percentage, and listing info.",
-    mimeType: "application/json",
-  },
-  async (uri) => {
-    try {
-      const match = uri.href.match(/cws:\/\/extensions\/([^/?#]+)/);
-      if (!match) {
-        throw new Error(`Invalid resource URI: ${uri.href}. Expected format: cws://extensions/{extensionId}`);
-      }
-      const extensionId = match[1];
-      const pub = resolvePublisherId();
-
-      const token = await getAccessToken();
-
-      const [statusRes, metaRes] = await Promise.all([
-        fetch(`${API_BASE}/v2/publishers/${pub}/items/${extensionId}:fetchStatus`, {
-          headers: { Authorization: `Bearer ${token}` },
-        }),
-        fetch(`${V1_BASE}/items/${extensionId}?projection=PUBLISHED`, {
-          headers: { Authorization: `Bearer ${token}` },
-        }),
-      ]);
-
-      const statusText = await statusRes.text();
-      const metaText = await metaRes.text();
-
-      let statusData: unknown = {};
-      let metaData: unknown = {};
-      try { statusData = JSON.parse(statusText); } catch { statusData = { raw: statusText }; }
-      try { metaData = JSON.parse(metaText); } catch { metaData = { raw: metaText }; }
-
-      const result = {
-        extensionId,
-        status: statusData,
-        metadata: metaData,
-      };
-
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            mimeType: "application/json",
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    } catch (e: any) {
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            mimeType: "application/json",
-            text: JSON.stringify({ error: e.message }),
-          },
-        ],
-      };
-    }
+  new ResourceTemplate("cws://extensions/{extensionId}", { list: undefined }),
+  { description: "Chrome Web Store v2 publication and rollout status; listing text is not provided by the API.", mimeType: "application/json" },
+  async (uri, variables) => {
+    const extensionId = String(variables.extensionId);
+    const result = await apiCall(`${API_BASE}/v2/publishers/${resolvePublisherId()}/items/${encodeURIComponent(extensionId)}:fetchStatus`, { method: "GET" });
+    if (!result.ok) throw new Error(`Chrome Web Store status failed (${result.status}): ${result.body}`);
+    return { contents: [{ uri: uri.href, mimeType: "application/json", text: result.body }] };
   },
 );
 
@@ -803,8 +470,8 @@ Follow these steps using the available cws-mcp tools:
 
 1. **Upload the ZIP** — Use the \`upload\` tool with zipPath="${zipPath}" and itemId="${extensionId}" to upload the new build as a draft.
 2. **Verify upload** — Use the \`status\` tool to confirm the upload succeeded and the item is in DRAFT state.
-3. **Check/update metadata** — Use the \`get\` tool (projection=DRAFT) to review current listing metadata. If anything needs updating (title, description, category), use \`update-metadata\` or \`update-metadata-ui\`.
-4. **Publish** — Use the \`publish\` tool to submit the draft for review. Optionally use publishType="STAGED_PUBLISH" for staged rollout, or skipReview=true if eligible.
+3. **Check/update metadata** — Use \`get-metadata-ui\` for current draft listing fields, and \`update-metadata\` to save supported changes. Title and summary come from the ZIP manifest. Saving listing fields does not submit for review.
+4. **Publish** — Use \`publish\` to submit for review. Set blockOnWarnings=true to stop on validation warnings. Use publishType="STAGED_PUBLISH" to hold publication after approval; rollout percentage is controlled separately.
 5. **Confirm submission** — Use the \`status\` tool again to confirm the item entered review queue.
 6. **Optional staged rollout** — After approval, use \`deploy-percentage\` to gradually roll out (e.g., 10%, 50%, 100%).
 
@@ -834,7 +501,7 @@ Extension ID: ${extensionId}
 Use the following cws-mcp tools to gather a full picture:
 
 1. **Fetch status** — Use the \`status\` tool with itemId="${extensionId}" to get the review status and any rejection reasons.
-2. **Fetch metadata** — Use the \`get\` tool with itemId="${extensionId}" and projection=PUBLISHED to see what is currently live.
+2. **Inspect publication** — Read the published/submitted revisions from the status response. Listing text is not exposed by v2; \`get-metadata-ui\` reads the current dashboard draft, not the live listing.
 3. **Summarize** — Report:
    - Current review state (e.g., IN_REVIEW, PUBLISHED, REJECTED, DRAFT)
    - Deployed version and deploy percentage if in staged rollout
@@ -848,14 +515,17 @@ Please start with step 1 now.`,
   }),
 );
 
+return server;
+}
+
 // ── Start ──
 
 async function main() {
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  await createServer().connect(transport);
 }
 
-main().catch((err) => {
+if (process.argv[1] && realpathSync(process.argv[1]) === __filename) main().catch((err) => {
   process.stderr.write(`Fatal: ${err.message}\n`);
   process.exit(1);
 });
@@ -882,6 +552,7 @@ export function createSandboxServer() {
     publishType: z.enum(["DEFAULT_PUBLISH", "STAGED_PUBLISH"]).optional().describe("Publish type"),
     deployPercentage: z.number().int().min(0).max(100).optional().describe("Initial deploy percentage"),
     skipReview: z.boolean().optional().describe("Attempt to skip review"),
+    blockOnWarnings: z.boolean().optional().describe("Reject publishing on validation warnings"),
   }, noop);
 
   sandbox.tool("status", "Fetch the current status of an extension on Chrome Web Store.", {
@@ -900,35 +571,10 @@ export function createSandboxServer() {
     publisherId: z.string().optional().describe("Publisher ID"),
   }, noop);
 
-  sandbox.tool("get", "Get the current metadata of a Chrome Web Store item (v1.1 API).", {
-    itemId: z.string().optional().describe("Extension item ID"),
-    projection: z.enum(["DRAFT", "PUBLISHED"]).optional().describe("Metadata projection"),
-  }, noop);
-
-  sandbox.tool("update-metadata", "Update the store listing metadata of a Chrome Web Store item (v1.1 API).", {
-    itemId: z.string().optional().describe("Extension item ID"),
-    title: z.string().optional().describe("Store listing title"),
-    summary: z.string().optional().describe("Store listing short summary"),
-    description: z.string().optional().describe("Store listing description"),
-    category: z.string().optional().describe("Category"),
-    defaultLocale: z.string().optional().describe("Default locale"),
-    homepageUrl: z.string().optional().describe("Homepage URL"),
-    supportUrl: z.string().optional().describe("Support URL"),
-    metadata: z.record(z.unknown()).optional().describe("Raw metadata object"),
-  }, noop);
-
-  sandbox.tool("update-metadata-ui", "Update listing metadata via Chrome Web Store dashboard UI automation (Playwright).", {
-    itemId: z.string().optional().describe("Extension item ID"),
-    title: z.string().optional().describe("Store listing title"),
-    summary: z.string().optional().describe("Store listing short summary"),
-    description: z.string().optional().describe("Store listing long description"),
-    category: z.string().optional().describe("Category label"),
-    homepageUrl: z.string().optional().describe("Homepage URL"),
-    supportUrl: z.string().optional().describe("Support URL"),
-    storeIconPath: z.string().optional().describe("Absolute path to 128x128 store icon image"),
-    accountIndex: z.number().int().min(0).max(9).optional().describe("Google account index"),
-    headless: z.boolean().optional().describe("Run browser headless"),
-  }, noop);
+  sandbox.tool("get", "Read v2 publication status; listing metadata and projection are not supported.", getSchema, noop);
+  sandbox.tool("get-metadata-ui", "Read current draft listing fields from the Developer Dashboard.", dashboardOptions, noop);
+  sandbox.tool("update-metadata", "Save and verify draft listing fields through the Developer Dashboard.", metadataSchema, noop);
+  sandbox.tool("update-metadata-ui", "Save and verify draft listing fields through the Developer Dashboard.", metadataSchema, noop);
 
   return sandbox;
 }

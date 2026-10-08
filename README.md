@@ -15,7 +15,7 @@ Use this MCP when you need to:
 - **"Upload a new version of my Chrome extension"** — build your ZIP and use the `upload` tool to push it as a draft
 - **"Publish my extension to the Chrome Web Store"** — use `publish` to submit for review and go live
 - **"Check the review status of my extension"** — use `status` to see review state, version, and deploy percentage
-- **"Update my extension's metadata (description, screenshots)"** — use `update-metadata-ui` to change store listing details
+- **"Update my extension's description or category"** — use `update-metadata` to save and verify the draft listing
 - **"Cancel a pending submission"** — use `cancel` to withdraw a submission under review
 - **"Set up staged rollout for my extension"** — use `publish` with staged rollout, then `deploy-percentage` to ramp up
 
@@ -24,13 +24,14 @@ Use this MCP when you need to:
 | Tool | Description |
 |---|---|
 | `upload` | Upload a ZIP file to Chrome Web Store (update existing item draft) |
-| `publish` | Publish an extension with optional staged rollout, publish type, and skip-review |
+| `publish` | Submit/publish with publish type, rollout percentage, skip-review, and `blockOnWarnings` |
 | `status` | Fetch the current status including review state, deploy percentage, and version |
 | `cancel` | Cancel a pending submission |
 | `deploy-percentage` | Set staged rollout percentage (0-100, must exceed current target) |
-| `get` | Read draft/published listing metadata (v1.1 API, deprecated Oct 2026) |
-| `update-metadata` | Update listing metadata via v1.1 API (deprecated Oct 2026) |
-| `update-metadata-ui` | Update listing metadata via dashboard UI automation (Playwright) |
+| `get` | Alias of `status`: v2 publication status, not listing text |
+| `get-metadata-ui` | Read the current draft description, category, homepage URL, and support URL from the dashboard |
+| `update-metadata` | Save those four supported draft fields through the dashboard and verify them after reload |
+| `update-metadata-ui` | Alias of `update-metadata` |
 
 ## API Coverage
 
@@ -44,7 +45,7 @@ This MCP server covers **all Chrome Web Store API v2 endpoints**:
 | `publishers.items.cancelSubmission` | `cancel` |
 | `publishers.items.setPublishedDeployPercentage` | `deploy-percentage` |
 
-Additionally, v1.1 API endpoints are available for metadata operations (`get`, `update-metadata`), with dashboard UI automation (`update-metadata-ui`) as the recommended alternative since v1 is deprecated.
+All API requests use v2. The public API has no listing-text read/write endpoints; dashboard tools use Playwright and a separate signed-in Chrome profile. Saving listing fields never submits for review. Missing fields, unmatched categories, and unconfirmed saves return errors instead of success.
 
 ## Setup
 
@@ -58,18 +59,7 @@ Additionally, v1.1 API endpoints are available for metadata operations (`get`, `
 
 ### 2. Get Refresh Token
 
-```bash
-# Open in browser to get authorization code
-open "https://accounts.google.com/o/oauth2/auth?response_type=code&scope=https://www.googleapis.com/auth/chromewebstore&client_id=YOUR_CLIENT_ID&redirect_uri=urn:ietf:wg:oauth:2.0:oob"
-
-# Exchange code for refresh token
-curl -X POST https://oauth2.googleapis.com/token \
-  -d "client_id=YOUR_CLIENT_ID" \
-  -d "client_secret=YOUR_CLIENT_SECRET" \
-  -d "code=YOUR_AUTH_CODE" \
-  -d "grant_type=authorization_code" \
-  -d "redirect_uri=urn:ietf:wg:oauth:2.0:oob"
-```
+Follow Google's [OAuth flow for desktop apps](https://developers.google.com/identity/protocols/oauth2/native-app) using a local loopback redirect URI, PKCE, and the scope `https://www.googleapis.com/auth/chromewebstore`. Request offline access (`access_type=offline`; use `prompt=consent` when you need a new refresh token). Exchange the authorization code using the same redirect URI and keep the refresh token in your MCP client's secret/environment settings. The former copy-and-paste OOB redirect is no longer supported by Google.
 
 ### 3. Configure MCP
 
@@ -131,11 +121,10 @@ Use the cws-mcp status tool
 2. Use cws-mcp publish
 ```
 
-### Publish with staged rollout
+### Hold publication until after approval
 ```
 Use cws-mcp publish with:
 - publishType="STAGED_PUBLISH"
-- deployPercentage=10
 ```
 
 ### Publish with skip-review
@@ -143,53 +132,53 @@ Use cws-mcp publish with:
 Use cws-mcp publish with skipReview=true
 ```
 
-### Update listing title/description without publishing
+`STAGED_PUBLISH` holds an approved submission for a later publication; it is not the rollout percentage. Use `deployPercentage` separately for an eligible extension's gradual rollout.
+
+### Stop publishing on validation warnings
+
 ```
+Use cws-mcp publish with blockOnWarnings=true
+```
+
+The default is `false`, matching the API. Inspect returned `warningInfo.warnings` even when publishing succeeds.
+
+### Read or save listing fields without submitting for review
+
+```
+Use cws-mcp get-metadata-ui with headless=false
 Use cws-mcp update-metadata with:
-- title="Pexus"
-- summary="Official wallet for Plumise"
 - description="..."
-- category="productivity"
-- defaultLocale="en"
-```
-
-### Update advanced metadata fields
-```
-Use cws-mcp update-metadata with metadata={
-  "homepageUrl": "https://plumise.com",
-  "supportUrl": "https://plug.plumise.com/docs"
-}
-```
-
-### When API metadata updates don't reflect
-```
-Use cws-mcp update-metadata-ui with:
-- title
-- summary
-- description
-- category
-- homepageUrl
-- supportUrl
+- category="Developer Tools"
+- homepageUrl="https://example.com"
+- supportUrl="https://example.com/support"
 ```
 
 Notes:
-- This tool automates the Chrome Web Store dashboard UI.
+- `category` must match the visible option label exactly in the current dashboard language; English and Korean field labels are supported.
+- These tools read/save the **current dashboard draft**, not the published listing or an arbitrary locale. Select the intended localization in the dashboard first; ambiguous fields fail safely.
+- Change title, summary, and default locale in `manifest.json` / localized messages, rebuild, and `upload` the ZIP. Use the dashboard directly for icons and screenshots.
 - First run with `headless=false` if login is required.
 - Browser profile path defaults to `~/.cws-mcp-profile` (override with `CWS_DASHBOARD_PROFILE_DIR`).
+- Google Chrome must be installed. Dashboard UI changes can require selector updates; unverified saves return errors. Verify the dashboard before retrying an ambiguous failure.
 
 ### Staged rollout
 ```
-1. Use cws-mcp publish
-2. Use cws-mcp deploy-percentage with percentage=10
+1. Use cws-mcp publish with deployPercentage=10
+2. Monitor approval/publication with status
 3. Use cws-mcp deploy-percentage with percentage=50
 4. Use cws-mcp deploy-percentage with percentage=100
 ```
 
 Note: `deploy-percentage` is only available for extensions with 10,000+ seven-day active users. The new percentage must always be higher than the current target.
 
-## V1 API Deprecation
+## Migrating from 1.x to 2.0
 
-The `get` and `update-metadata` tools use the Chrome Web Store v1.1 API, which is **deprecated and will be removed after October 15, 2026**. The v2 API does not provide metadata read/write endpoints, so these tools remain available as a bridge. Use `update-metadata-ui` (Playwright dashboard automation) as the long-term alternative.
+Google [shuts down API v1 on October 15, 2026](https://developer.chrome.com/docs/webstore/api/v1). Version 2.0 no longer calls it:
+
+- `get` now returns v2 status. Its old `projection` argument is rejected; use `get-metadata-ui` for draft listing text. Published listing text is not exposed by v2.
+- `update-metadata` now uses the same dashboard workflow as `update-metadata-ui` and therefore needs Chrome login, not just an API token.
+- Raw `metadata`, `title`, `summary`, and `defaultLocale` inputs are rejected with guidance; unsupported inputs are never silently ignored.
+- `storeIconPath` is no longer accepted as a working upload. The previous generic file-input approach could not verify which asset it changed; upload the icon in the Developer Dashboard instead.
 
 ## License
 

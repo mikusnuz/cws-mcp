@@ -13,7 +13,7 @@ Chrome Web Store 확장 프로그램 관리를 위한 MCP 서버. Claude Code �
 - **"크롬 확장 프로그램 새 버전 업로드해줘"** — ZIP을 빌드하고 `upload` 도구로 초안 업데이트
 - **"확장 프로그램 Chrome Web Store에 퍼블리시해줘"** — `publish`로 리뷰 제출 및 배포
 - **"확장 프로그램 리뷰 상태 확인해줘"** — `status`로 리뷰 상태, 버전, 배포 비율 확인
-- **"확장 프로그램 메타데이터(설명, 스크린샷) 업데이트해줘"** — `update-metadata-ui`로 스토어 리스팅 수정
+- **"확장 프로그램 설명이나 카테고리 업데이트해줘"** — `update-metadata`로 초안을 저장하고 반영 확인
 - **"제출 대기 중인 거 취소해줘"** — `cancel`로 리뷰 중인 제출 철회
 - **"확장 프로그램 단계적 배포 설정해줘"** — `publish`로 단계적 배포 후 `deploy-percentage`로 비율 증가
 
@@ -22,13 +22,14 @@ Chrome Web Store 확장 프로그램 관리를 위한 MCP 서버. Claude Code �
 | 도구 | 설명 |
 |---|---|
 | `upload` | ZIP 파일을 Chrome Web Store에 업로드 (기존 항목 초안 업데이트) |
-| `publish` | 단계적 배포, 퍼블리시 유형, 리뷰 건너뛰기 옵션으로 확장 프로그램 퍼블리시 |
+| `publish` | 게시 유형·배포 비율·리뷰 건너뛰기·`blockOnWarnings` 옵션으로 제출/게시 |
 | `status` | 리뷰 상태, 배포 비율, 버전 등 현재 상태 확인 |
 | `cancel` | 제출 대기 중인 항목 취소 |
 | `deploy-percentage` | 단계적 배포 비율 설정 (0-100, 현재 목표보다 높아야 함) |
-| `get` | DRAFT/PUBLISHED 리스팅 메타데이터 조회 (v1.1 API, 2026년 10월 지원 종료) |
-| `update-metadata` | v1.1 API로 리스팅 메타데이터 업데이트 (2026년 10월 지원 종료) |
-| `update-metadata-ui` | 대시보드 UI 자동화(Playwright)로 리스팅 메타데이터 업데이트 |
+| `get` | `status`와 동일한 v2 게시 상태 조회. 리스팅 본문은 반환하지 않음 |
+| `get-metadata-ui` | 대시보드의 현재 초안 설명·카테고리·홈페이지 URL·지원 URL 조회 |
+| `update-metadata` | 위 4개 초안 항목을 대시보드에서 저장하고 새로고침 후 반영 확인 |
+| `update-metadata-ui` | `update-metadata`와 동일 |
 
 ## API 커버리지
 
@@ -42,7 +43,7 @@ Chrome Web Store 확장 프로그램 관리를 위한 MCP 서버. Claude Code �
 | `publishers.items.cancelSubmission` | `cancel` |
 | `publishers.items.setPublishedDeployPercentage` | `deploy-percentage` |
 
-추가로, 메타데이터 조작을 위한 v1.1 API 엔드포인트(`get`, `update-metadata`)가 제공되며, v1 지원 종료에 대비하여 대시보드 UI 자동화(`update-metadata-ui`)를 권장합니다.
+모든 API 요청은 v2를 사용합니다. 공개 API에 리스팅 본문 조회·수정 기능이 없어 대시보드 도구는 별도 로그인된 Chrome 프로필과 Playwright를 사용합니다. 저장은 심사 제출로 대체되지 않습니다. 필드를 찾지 못하거나 카테고리·저장 결과를 확인하지 못하면 성공 대신 오류를 반환합니다.
 
 ## 설정
 
@@ -56,18 +57,7 @@ Chrome Web Store 확장 프로그램 관리를 위한 MCP 서버. Claude Code �
 
 ### 2. Refresh Token 발급
 
-```bash
-# 브라우저에서 열어 인증 코드 획득
-open "https://accounts.google.com/o/oauth2/auth?response_type=code&scope=https://www.googleapis.com/auth/chromewebstore&client_id=YOUR_CLIENT_ID&redirect_uri=urn:ietf:wg:oauth:2.0:oob"
-
-# 코드를 refresh token으로 교환
-curl -X POST https://oauth2.googleapis.com/token \
-  -d "client_id=YOUR_CLIENT_ID" \
-  -d "client_secret=YOUR_CLIENT_SECRET" \
-  -d "code=YOUR_AUTH_CODE" \
-  -d "grant_type=authorization_code" \
-  -d "redirect_uri=urn:ietf:wg:oauth:2.0:oob"
-```
+Google의 [데스크톱 앱 OAuth 흐름](https://developers.google.com/identity/protocols/oauth2/native-app)에 따라 로컬 loopback redirect URI, PKCE, `https://www.googleapis.com/auth/chromewebstore` scope를 사용합니다. `access_type=offline`을 요청하고 새 refresh token이 필요하면 `prompt=consent`를 사용하세요. 같은 redirect URI로 코드를 교환한 뒤 refresh token은 MCP 클라이언트의 비밀값/환경변수 설정에 보관합니다. 예전 OOB 방식의 코드 복사·붙여넣기 redirect는 Google에서 더 이상 지원하지 않습니다.
 
 ### 3. MCP 설정
 
@@ -129,11 +119,10 @@ cws-mcp status 도구 사용
 2. cws-mcp publish
 ```
 
-### 단계적 배포로 퍼블리시
+### 승인 후 게시를 보류하기
 ```
 cws-mcp publish 사용:
 - publishType="STAGED_PUBLISH"
-- deployPercentage=10
 ```
 
 ### 리뷰 건너뛰기로 퍼블리시
@@ -141,54 +130,53 @@ cws-mcp publish 사용:
 cws-mcp publish에서 skipReview=true 사용
 ```
 
-### 퍼블리시 없이 제목/설명 업데이트
+`STAGED_PUBLISH`는 승인 후 나중에 게시하도록 보류하는 옵션이며 배포 비율과 다릅니다. 사용 요건을 충족하는 확장 프로그램의 점진적 배포는 `deployPercentage`를 별도로 지정하세요.
+
+### 검증 경고가 있으면 게시 중단
+
 ```
+cws-mcp publish에서 blockOnWarnings=true 사용
+```
+
+기본값은 API와 동일하게 `false`입니다. 성공 응답이어도 `warningInfo.warnings`를 확인하세요.
+
+### 심사 제출 없이 초안 조회·저장
+
+```
+cws-mcp get-metadata-ui에서 headless=false 사용
 cws-mcp update-metadata 사용:
-- title="Pexus"
-- summary="Official wallet for Plumise"
 - description="..."
-- category="productivity"
-- defaultLocale="en"
-```
-
-### 고급 메타데이터 업데이트
-```
-cws-mcp update-metadata에서 metadata 객체 전달:
-{
-  "homepageUrl": "https://plumise.com",
-  "supportUrl": "https://plug.plumise.com/docs"
-}
-```
-
-### API 반영이 안 되는 경우(UI 자동화)
-```
-cws-mcp update-metadata-ui 사용:
-- title
-- summary
-- description
-- category
-- homepageUrl
-- supportUrl
+- category="Developer Tools"
+- homepageUrl="https://example.com"
+- supportUrl="https://example.com/support"
 ```
 
 참고:
-- 이 도구는 Chrome Web Store 대시보드 UI를 자동 조작합니다.
+- `category`는 현재 대시보드 언어의 선택지 문구와 정확히 일치해야 합니다. 영어·한국어 필드 이름을 지원합니다.
+- 조회·저장 대상은 **현재 대시보드 초안**입니다. 게시된 본문이나 임의 언어 버전 조회가 아닙니다. 원하는 로컬라이제이션을 대시보드에서 먼저 선택하세요. 필드가 모호하면 중단합니다.
+- 제목·요약·기본 언어는 `manifest.json` / 번역 메시지를 수정하고 ZIP을 다시 빌드해 `upload`합니다. 아이콘·스크린샷은 대시보드에서 직접 올리세요.
 - 로그인 필요 시 `headless=false`로 1회 실행해 로그인하세요.
 - 브라우저 프로필 기본 경로: `~/.cws-mcp-profile` (`CWS_DASHBOARD_PROFILE_DIR`로 변경 가능)
+- Google Chrome 설치가 필요합니다. 대시보드 UI 변경으로 선택자 수정이 필요할 수 있으며 확인할 수 없는 저장은 오류를 반환합니다. 모호한 실패는 재시도 전 대시보드에서 상태를 확인하세요.
 
 ### 단계적 배포
 ```
-1. cws-mcp publish
-2. cws-mcp deploy-percentage (percentage=10)
+1. cws-mcp publish (deployPercentage=10)
+2. status로 승인·게시 확인
 3. cws-mcp deploy-percentage (percentage=50)
 4. cws-mcp deploy-percentage (percentage=100)
 ```
 
 참고: `deploy-percentage`는 7일 활성 사용자 10,000명 이상인 확장 프로그램에서만 사용 가능합니다. 새 비율은 항상 현재 목표보다 높아야 합니다.
 
-## V1 API 지원 종료 안내
+## 1.x에서 2.0으로 이전
 
-`get`과 `update-metadata` 도구는 Chrome Web Store v1.1 API를 사용하며, **2026년 10월 15일 이후 지원이 종료**됩니다. v2 API에는 메타데이터 읽기/쓰기 엔드포인트가 없어 이 도구들이 브릿지 역할을 합니다. 장기적으로는 `update-metadata-ui` (Playwright 대시보드 자동화)를 대안으로 사용하세요.
+Google은 [2026년 10월 15일 v1 API를 종료](https://developer.chrome.com/docs/webstore/api/v1)합니다. 2.0은 v1을 호출하지 않습니다.
+
+- `get`은 이제 v2 게시 상태를 반환합니다. 기존 `projection` 인수는 오류 처리하며, 초안 본문은 `get-metadata-ui`로 읽습니다. v2는 게시된 리스팅 본문을 제공하지 않습니다.
+- `update-metadata`도 `update-metadata-ui`와 같은 대시보드 흐름을 사용하므로 API 토큰 외에 Chrome 로그인이 필요합니다.
+- `metadata` 객체·`title`·`summary`·`defaultLocale`은 수정 방법을 안내하는 오류로 반환합니다. 미지원 입력을 무시하고 성공시키지 않습니다.
+- `storeIconPath`는 더 이상 업로드 기능으로 지원하지 않습니다. 기존 범용 파일 입력 방식으로는 어떤 에셋에 반영됐는지 확실히 확인할 수 없어 중단했습니다. 아이콘은 Developer Dashboard에서 올리세요.
 
 ## 라이선스
 
