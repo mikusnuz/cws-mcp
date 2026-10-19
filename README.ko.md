@@ -33,6 +33,8 @@ Chrome Web Store 확장 프로그램 관리를 위한 MCP 서버. Claude Code �
 
 ## API 커버리지
 
+업로드가 `IN_PROGRESS`이면 아직 처리 중입니다. `status`의 `lastAsyncUploadState`가 `SUCCEEDED`가 된 뒤 게시하세요. `FAILED`는 도구 오류로 반환하며, 게시가 차단되면 해결할 경고를 포함한 `error.details`를 보존합니다.
+
 이 MCP 서버는 **모든 Chrome Web Store API v2 엔드포인트**를 지원합니다:
 
 | v2 엔드포인트 | MCP 도구 |

@@ -35,6 +35,8 @@ Use this MCP when you need to:
 
 ## API Coverage
 
+An upload returning `IN_PROGRESS` is pending: poll `status` until `lastAsyncUploadState` is `SUCCEEDED` before publishing. `FAILED` is a tool error. A blocked publish retains `error.details`, including the warnings that need attention.
+
 This MCP server covers **all Chrome Web Store API v2 endpoints**:
 
 | v2 Endpoint | MCP Tool |

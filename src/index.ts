@@ -122,6 +122,9 @@ function formatResponse(result: { ok: boolean; status: number; body: string }): 
     const parsed = JSON.parse(result.body);
     if (parsed.error?.message) {
       errorDetail = `${parsed.error.message} (code: ${parsed.error.code || result.status})`;
+      if (parsed.error.details !== undefined) {
+        errorDetail += `\nDetails: ${JSON.stringify(parsed.error.details)}`;
+      }
     }
   } catch {
     // Keep raw body
@@ -194,6 +197,22 @@ server.tool(
         signal: AbortSignal.timeout(15 * 60_000),
       });
 
+      if (result.ok) {
+        const payload = JSON.parse(result.body);
+        if (payload.uploadState === "FAILED") {
+          return { content: [{ type: "text" as const, text: result.body }], isError: true };
+        }
+        if (payload.uploadState === "IN_PROGRESS") {
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify({
+              ...payload,
+              pending: true,
+              nextStep: "Poll status until lastAsyncUploadState is SUCCEEDED before publishing. FAILED means the upload did not complete.",
+            }) }],
+            isError: false,
+          };
+        }
+      }
       return formatResponse(result);
     } catch (e: any) {
       return {

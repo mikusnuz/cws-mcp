@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
@@ -61,6 +62,40 @@ test('unsupported metadata returns an error before browser or API calls', async 
       const result = await client.callTool({ name: 'update-metadata', arguments: { itemId: 'abc', ...fields } });
       assert.equal(result.isError, true);
       assert.doesNotMatch(JSON.stringify(result), /Network must not be used/);
+    }
+  } finally { await close(); }
+});
+
+test('publish preserves blocking warning error.details', async t => {
+  const details = [{ warnings: [{ reason: 'PRIVACY', description: 'Privacy policy URL is missing' }] }];
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    if (String(url).includes('oauth2')) return new Response(JSON.stringify({ access_token: 'test-token', expires_in: 3600 }));
+    return new Response(JSON.stringify({ error: { code: 400, message: 'Validation failed', details } }), { status: 400 });
+  });
+  const { client, close } = await connect();
+  try {
+    const result = await client.callTool({ name: 'publish', arguments: { itemId: 'abc', blockOnWarnings: true } });
+    assert.equal(result.isError, true);
+    assert.match(JSON.stringify(result), /Privacy policy URL is missing/);
+    assert.match(JSON.stringify(result), /PRIVACY/);
+  } finally { await close(); }
+});
+
+test('upload distinguishes failed, pending and successful processing', async t => {
+  let uploadState = 'FAILED';
+  t.mock.method(globalThis, 'fetch', async (url: string) => new Response(JSON.stringify(
+    String(url).includes('oauth2') ? { access_token: 'test-token', expires_in: 3600 } : { itemId: 'abc', uploadState },
+  )));
+  const { client, close } = await connect();
+  try {
+    for (const state of ['FAILED', 'IN_PROGRESS', 'SUCCEEDED']) {
+      uploadState = state;
+      const result = await client.callTool({ name: 'upload', arguments: { itemId: 'abc', zipPath: fileURLToPath(import.meta.url) } });
+      assert.equal(result.isError, state === 'FAILED');
+      const payload = JSON.parse((result.content as any[])[0].text);
+      assert.equal(payload.uploadState, state);
+      assert.equal(payload.pending, state === 'IN_PROGRESS' ? true : undefined);
+      if (state === 'IN_PROGRESS') assert.match(payload.nextStep, /SUCCEEDED before publishing/);
     }
   } finally { await close(); }
 });
