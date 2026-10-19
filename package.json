@@ -1,6 +1,6 @@
 {
   "name": "cws-mcp",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "mcpName": "io.github.mikusnuz/cws",
   "description": "MCP server for Chrome Web Store extension management",
   "type": "module",
@@ -14,7 +14,7 @@
     "README.md"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "build": "tsc",

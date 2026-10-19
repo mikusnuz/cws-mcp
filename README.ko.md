@@ -49,6 +49,8 @@ Chrome Web Store 확장 프로그램 관리를 위한 MCP 서버. Claude Code �
 
 ## 설정
 
+Playwright 실행 요건에 맞춰 Node.js 20 이상이 필요합니다.
+
 ### 1. OAuth2 자격 증명 생성
 
 1. [Google Cloud Console](https://console.cloud.google.com/) 접속

@@ -51,6 +51,8 @@ All API requests use v2. The public API has no listing-text read/write endpoints
 
 ## Setup
 
+Requires Node.js 20 or newer, matching the Playwright runtime requirement.
+
 ### 1. Create OAuth2 Credentials
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
